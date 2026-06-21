@@ -50,12 +50,15 @@ impl HotkeyManager {
         let mods = HOT_KEY_MODIFIERS(modifiers);
 
         unsafe {
-            if RegisterHotKey(None, id, mods, vk).is_ok() {
-                self.registered.insert(id, action);
-                info!("Registered hotkey {:?} (mods={:#x}, vk={:#x})", action, modifiers, vk);
-                Ok(())
-            } else {
-                Err(format!("Failed to register hotkey {:?}", action))
+            match RegisterHotKey(None, id, mods, vk) {
+                Ok(()) => {
+                    self.registered.insert(id, action);
+                    info!("Registered hotkey {:?} (mods={:#x}, vk={:#x})", action, modifiers, vk);
+                    Ok(())
+                }
+                Err(e) => {
+                    Err(format!("Failed to register hotkey {:?}: {} (code={})", action, e, e.code().0))
+                }
             }
         }
     }
