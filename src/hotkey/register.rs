@@ -10,6 +10,7 @@ pub enum HotkeyAction {
     ToggleRecording,
     CycleLanguage,
     Flush,
+    PushToTalk,
 }
 
 impl HotkeyAction {
@@ -18,6 +19,7 @@ impl HotkeyAction {
             Self::ToggleRecording => 1,
             Self::CycleLanguage => 2,
             Self::Flush => 3,
+            Self::PushToTalk => 4,
         }
     }
 }

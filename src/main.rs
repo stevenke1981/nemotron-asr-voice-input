@@ -1,6 +1,7 @@
 mod audio;
 mod asr;
 mod config;
+mod convert;
 mod download;
 mod hotkey;
 mod injector;
@@ -85,6 +86,12 @@ struct AppState {
     is_running: AtomicBool,
     /// Latest non-empty transcript text (for injection on stop).
     last_transcript: std::sync::Mutex<String>,
+    /// Push-to-talk mode active (held key).
+    is_ptt_mode: AtomicBool,
+    /// Virtual key code for the PTT key (to detect key-up).
+    ptt_vk: std::sync::Mutex<u32>,
+    /// Conversion mode shared across threads.
+    conversion_mode: std::sync::Mutex<convert::ConversionMode>,
 }
 
 impl AppState {
@@ -93,6 +100,9 @@ impl AppState {
             is_recording: AtomicBool::new(false),
             is_running: AtomicBool::new(true),
             last_transcript: std::sync::Mutex::new(String::new()),
+            is_ptt_mode: AtomicBool::new(false),
+            ptt_vk: std::sync::Mutex::new(0),
+            conversion_mode: std::sync::Mutex::new(convert::ConversionMode::None),
         }
     }
 }
@@ -108,6 +118,24 @@ fn main() -> Result<()> {
         .init();
 
     info!("Nemotron Voice Input v{}", env!("CARGO_PKG_VERSION"));
+
+    // ── Single-instance enforcement ────────────────────────────────
+    const MUTEX_NAME: &str = "Global\\NemotronVoiceInput-{5E8B2E6A-8C1A-4C3D-9F0E-7D2A1B3C4D5E}";
+    let mutex_wide: Vec<u16> = MUTEX_NAME.encode_utf16().chain(std::iter::once(0)).collect();
+    let _instance_mutex = unsafe {
+        let handle = windows::Win32::System::Threading::CreateMutexW(
+            None, // default security attributes
+            false, // initially not owned
+            windows::core::PCWSTR(mutex_wide.as_ptr()),
+        );
+        if handle.is_err() || windows::Win32::Foundation::GetLastError() == windows::Win32::Foundation::ERROR_ALREADY_EXISTS
+        {
+            error!("Another instance is already running — exiting.");
+            eprintln!("Nemotron Voice Input is already running.");
+            std::process::exit(0);
+        }
+        handle
+    };
 
     // Parse CLI arguments
     let cli = Cli::parse();
@@ -227,6 +255,18 @@ fn main() -> Result<()> {
         app_config.hotkey.flush_modifiers,
         app_config.hotkey.flush_vk,
     );
+    register_hotkey(
+        &mut hotkey_manager,
+        HotkeyAction::PushToTalk,
+        app_config.hotkey.ptt_modifiers,
+        app_config.hotkey.ptt_vk,
+    );
+    // Store PTT VK for key-up detection
+    *state.ptt_vk.lock().unwrap() = app_config.hotkey.ptt_vk;
+
+    // Initialize the conversion mode from config
+    *state.conversion_mode.lock().unwrap() = convert::ConversionMode::from_config(&app_config.conversion.mode);
+
     let toggle_reg = hotkey_manager.actual_key(HotkeyAction::ToggleRecording)
         .map(|(m, v)| format_hotkey(m, v))
         .unwrap_or_else(|| format_hotkey(app_config.hotkey.toggle_modifiers, app_config.hotkey.toggle_vk));
@@ -236,7 +276,11 @@ fn main() -> Result<()> {
     let flush_reg = hotkey_manager.actual_key(HotkeyAction::Flush)
         .map(|(m, v)| format_hotkey(m, v))
         .unwrap_or_else(|| format_hotkey(app_config.hotkey.flush_modifiers, app_config.hotkey.flush_vk));
-    info!("Hotkeys registered: ToggleRecording({}), CycleLanguage({}), Flush({})", toggle_reg, lang_reg, flush_reg);
+    let ptt_reg = hotkey_manager.actual_key(HotkeyAction::PushToTalk)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(app_config.hotkey.ptt_modifiers, app_config.hotkey.ptt_vk));
+    info!("Hotkeys registered: ToggleRecording({}), CycleLanguage({}), Flush({}), PushToTalk({})",
+        toggle_reg, lang_reg, flush_reg, ptt_reg);
 
     // Channels
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);
@@ -310,6 +354,7 @@ fn main() -> Result<()> {
             let mut capture_buf = vec![0.0f32; chunk_capture];
             let mut resample_buf = vec![0.0f32; chunk_target];
             let mut last_text = String::new();
+            let mut last_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
 
             info!(
                 "Audio processing: capture {} Hz → target {} Hz, chunk {} → {} samples",
@@ -357,6 +402,13 @@ fn main() -> Result<()> {
                     &resample_buf[..output_len]
                 };
 
+                // Check for runtime VAD toggle
+                let current_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
+                if current_vad != last_vad {
+                    last_vad = current_vad;
+                    let _ = engine.set_vad(current_vad);
+                }
+
                 if let Err(e) = engine.feed_audio(feed_data) {
                     tracing::debug!("ASR feed error: {}", e);
                     continue;
@@ -400,9 +452,19 @@ fn main() -> Result<()> {
         .context("Failed to spawn watchdog thread")?;
 
     // Main loop
+    // Initialize runtime VAD flag from config
+    config::settings::RUNTIME_VAD_ENABLED.store(app_config.asr.use_vad, Ordering::SeqCst);
+
+    // Initialize Chinese text converters
+    if let Err(e) = convert::init_converters() {
+        info!("Chinese text converter not available: {} (continuing without conversion)", e);
+    } else {
+        info!("Chinese text converter initialized");
+    }
+
     info!(
-        "Ready. Press {} to start/stop recording. Language: {}",
-        toggle_reg, asr_config.language
+        "Ready. Press {} to start/stop recording, {} for push-to-talk. Language: {}",
+        toggle_reg, ptt_reg, app_config.language.language
     );
 
     let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
@@ -439,6 +501,17 @@ fn main() -> Result<()> {
                 let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
                 windows::Win32::UI::WindowsAndMessaging::DispatchMessageA(&msg);
             } else {
+                // ── PTT key-up monitoring ────────────────────────────
+                if state.is_ptt_mode.load(Ordering::SeqCst) {
+                    let vk = *state.ptt_vk.lock().unwrap();
+                    let key_down = windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) < 0;
+                    if !key_down {
+                        // Key released — stop recording + inject
+                        state.is_ptt_mode.store(false, Ordering::SeqCst);
+                        stop_recording(&state, &mut audio_capture, &mut injector, &tray_manager);
+                    }
+                }
+
                 // Check for transcript results
                 let recv_count = transcript_rx.len();
                 if recv_count > 0 {
@@ -449,10 +522,13 @@ fn main() -> Result<()> {
                             {
                                 info!("Transcript: {}", result.text);
                                 if result.is_final {
-                                    if let Err(e) = injector.inject_text(&result.text) {
+                                    // Apply conversion mode
+                                    let mode = *state.conversion_mode.lock().unwrap();
+                                    let text = convert::convert_text(&result.text, mode);
+                                    if let Err(e) = injector.inject_text(&text) {
                                         error!("Text injection failed: {}", e);
                                     } else {
-                                        info!("Injected: {}", result.text);
+                                        info!("Injected: {}", text);
                                     }
                                 }
                             }
@@ -543,6 +619,13 @@ fn handle_hotkey_action(
         HotkeyAction::CycleLanguage => {
             cycle_language(language_list, current_language, tray);
         }
+        HotkeyAction::PushToTalk => {
+            if !state.is_recording.load(Ordering::SeqCst) {
+                // Start recording in PTT mode (key-down)
+                state.is_ptt_mode.store(true, Ordering::SeqCst);
+                start_recording(state, audio_capture, tray);
+            }
+        }
         HotkeyAction::Flush => {
             info!("Flush triggered");
             audio_capture.clear_ringbuf();
@@ -590,10 +673,12 @@ fn stop_recording(
     // Inject the last non-empty transcript (for results that weren't final)
     let text = state.last_transcript.lock().unwrap().clone();
     if !text.is_empty() {
-        if let Err(e) = injector.inject_text(&text) {
+        let mode = *state.conversion_mode.lock().unwrap();
+        let converted = convert::convert_text(&text, mode);
+        if let Err(e) = injector.inject_text(&converted) {
             error!("Text injection failed (on stop): {}", e);
         } else {
-            info!("Injected (on stop): {}", text);
+            info!("Injected (on stop): {}", converted);
         }
     }
 

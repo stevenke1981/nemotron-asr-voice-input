@@ -277,6 +277,20 @@ impl Strings {
         }
     }
 
+    pub fn settings_conversion_section(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Chinese Conversion",
+            UiLang::Chinese => "簡繁轉換",
+        }
+    }
+
+    pub fn settings_conversion_mode(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Conversion:",
+            UiLang::Chinese => "轉換方向：",
+        }
+    }
+
     /// Full hotkey display string for the settings window.
     pub fn hotkey_toggle_label(&self) -> &'static str {
         match self.lang {
@@ -296,6 +310,13 @@ impl Strings {
         match self.lang {
             UiLang::English => "Flush",
             UiLang::Chinese => "清除緩衝",
+        }
+    }
+
+    pub fn hotkey_ptt_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Push-to-Talk (hold)",
+            UiLang::Chinese => "按住說話（放開即送）",
         }
     }
 

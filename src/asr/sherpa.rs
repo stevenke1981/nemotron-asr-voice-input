@@ -199,6 +199,20 @@ impl AsrEngine for SherpaAsrEngine {
             Err(AsrError::NotInitialized)
         }
     }
+
+    fn set_vad(&mut self, enabled: bool) -> Result<(), AsrError> {
+        if !self.initialized {
+            return Err(AsrError::NotInitialized);
+        }
+
+        if let Some(ref stream) = self.stream {
+            stream.set_option("use_vad", if enabled { "true" } else { "false" });
+            info!("VAD runtime toggled: {}", if enabled { "enabled" } else { "disabled" });
+            Ok(())
+        } else {
+            Err(AsrError::NotInitialized)
+        }
+    }
 }
 
 impl Default for SherpaAsrEngine {

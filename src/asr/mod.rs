@@ -22,6 +22,9 @@ pub trait AsrEngine: Send {
 
     /// Set the recognition language.
     fn set_language(&mut self, lang: &str) -> Result<(), AsrError>;
+
+    /// Enable or disable VAD at runtime.
+    fn set_vad(&mut self, enabled: bool) -> Result<(), AsrError>;
 }
 
 /// Result of ASR transcription.

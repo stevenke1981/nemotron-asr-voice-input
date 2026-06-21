@@ -49,6 +49,7 @@ const IDC_VAD: u32 = 2006;
 const IDC_STRATEGY: u32 = 2007;
 const IDC_KEY_DELAY: u32 = 2008;
 const IDC_RESTORE_CLIP: u32 = 2009;
+const IDC_CONVERSION: u32 = 2012;
 const IDC_SAVE: u32 = 2010;
 const IDC_CANCEL: u32 = 2011;
 
@@ -186,7 +187,7 @@ fn create_window(parent: HWND, config: AppConfig, strings: Strings) { unsafe {
         class_name,
         PCWSTR(title_wide.as_ptr()),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 460, 570,
+        CW_USEDEFAULT, CW_USEDEFAULT, 460, 640,
         Some(parent),
         None,
         Some(hinstance.into()),
@@ -462,23 +463,36 @@ fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
     add_checkbox(hwnd, IDC_RESTORE_CLIP, s.settings_restore_clipboard(), 16, cy, 400, 22, config.injector.restore_clipboard);
     y = gb + 104 + gap;
 
-    // ── Hotkeys section (3 lines) ──
+    // ── Chinese Conversion section (1 line) ──
     let gb = y;
-    add_groupbox(hwnd, s.settings_hotkeys_section(), 8, gb, 432, 82);
+    add_groupbox(hwnd, s.settings_conversion_section(), 8, gb, 432, 50);
+    let cy = gb + 16;
+    add_static(hwnd, s.settings_conversion_mode(), 16, cy, 130, 20);
+    let conversion = add_combobox(hwnd, IDC_CONVERSION, 150, cy - 2, 272, 120);
+    combo_add(conversion, &["None", "Simplified → Traditional", "Traditional → Simplified"]);
+    let conv_mode = crate::convert::ConversionMode::from_config(&config.conversion.mode);
+    combo_sel(conversion, conv_mode.index() as i32);
+    y = gb + 50 + gap;
+
+    // ── Hotkeys section (4 lines) ──
+    let gb = y;
+    add_groupbox(hwnd, s.settings_hotkeys_section(), 8, gb, 432, 102);
     let mut cy = gb + 16;
     let toggle_key = format_hotkey(config.hotkey.toggle_modifiers, config.hotkey.toggle_vk);
     let lang_key = format_hotkey(config.hotkey.lang_modifiers, config.hotkey.lang_vk);
     let flush_key = format_hotkey(config.hotkey.flush_modifiers, config.hotkey.flush_vk);
+    let ptt_key = format_hotkey(config.hotkey.ptt_modifiers, config.hotkey.ptt_vk);
     let hotkeys = [
         (s.hotkey_toggle_label(), toggle_key.as_str()),
         (s.hotkey_lang_label(), lang_key.as_str()),
         (s.hotkey_flush_label(), flush_key.as_str()),
+        (s.hotkey_ptt_label(), ptt_key.as_str()),
     ];
     for (action, key) in &hotkeys {
         add_static(hwnd, &s.settings_hotkey_line(action, key), 22, cy, 400, 20);
         cy += 20;
     }
-    y = gb + 82 + gap;
+    y = gb + 102 + gap;
 
     // ── Model status ──
     let (ok, total) = model_status(config);
@@ -515,6 +529,7 @@ fn on_save(hwnd: HWND) {
     let d = find(IDC_DECODING);
     let t = find(IDC_THREADS);
     let v = find(IDC_VAD);
+    let cv = find(IDC_CONVERSION);
     let s = find(IDC_STRATEGY);
     let k = find(IDC_KEY_DELAY);
     let r = find(IDC_RESTORE_CLIP);
@@ -523,11 +538,20 @@ fn on_save(hwnd: HWND) {
     data.config.language.language = parse_lang(&combo_text(a)).to_string();
     data.config.asr.provider = combo_text(p);
     data.config.asr.decoding_method = combo_text(d);
-    data.config.asr.use_vad = is_checked(v);
+    let new_vad = is_checked(v);
+    data.config.asr.use_vad = new_vad;
+    // Apply VAD change at runtime (no restart needed)
+    crate::config::settings::RUNTIME_VAD_ENABLED.store(new_vad, std::sync::atomic::Ordering::SeqCst);
     if let Ok(n) = edit_text(t).parse::<u32>() { data.config.asr.num_threads = n; }
     data.config.injector.strategy = combo_text(s);
     if let Ok(n) = edit_text(k).parse::<u64>() { data.config.injector.key_delay_ms = n; }
     data.config.injector.restore_clipboard = is_checked(r);
+    // Conversion mode: each item's index maps to ConversionMode via from_index
+    let conv_sel = send(cv, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
+    if conv_sel >= 0 {
+        let mode = crate::convert::ConversionMode::from_index(conv_sel as usize);
+        data.config.conversion.mode = mode.to_config().to_string();
+    }
 
     store_shared_config(&data.config);
 

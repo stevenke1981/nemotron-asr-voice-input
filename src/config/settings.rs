@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+
+/// Runtime VAD toggle — shared between main thread and audio processing thread.
+/// Updated from settings window at runtime (no restart required).
+pub static RUNTIME_VAD_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Top-level application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +24,8 @@ pub struct AppConfig {
     pub language: LanguageConfig,
     /// UI settings
     pub ui: UiConfig,
+    /// Chinese text conversion mode (none/s2t/t2s)
+    pub conversion: ConversionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +84,17 @@ pub struct HotkeyConfig {
     pub flush_modifiers: u32,
     /// Virtual key for flush
     pub flush_vk: u32,
+    /// Modifier keys for push-to-talk (hold to record, release to inject)
+    pub ptt_modifiers: u32,
+    /// Virtual key for push-to-talk
+    pub ptt_vk: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConversionConfig {
+    /// Conversion mode: "none", "s2t", "t2s"
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +123,7 @@ impl Default for AppConfig {
             hotkey: HotkeyConfig::default(),
             language: LanguageConfig::default(),
             ui: UiConfig::default(),
+            conversion: ConversionConfig::default(),
         }
     }
 }
@@ -166,6 +185,18 @@ impl Default for HotkeyConfig {
             flush_modifiers: 0x4003,
             // VK_SPACE = 0x20
             flush_vk: 0x20,
+            // MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT = 0x4006
+            ptt_modifiers: 0x4006,
+            // 'L' virtual key (Ctrl+Shift+L — different modifiers from lang which uses Alt)
+            ptt_vk: 0x4C,
+        }
+    }
+}
+
+impl Default for ConversionConfig {
+    fn default() -> Self {
+        Self {
+            mode: "none".into(),
         }
     }
 }
