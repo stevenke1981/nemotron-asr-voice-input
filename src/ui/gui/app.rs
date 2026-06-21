@@ -15,6 +15,17 @@ pub struct GuiApp {
     current_snapshot: GuiSnapshot,
     show_settings: bool,
     show_overlay_local: bool,
+    // Settings state
+    settings_language: String,
+    settings_provider: String,
+    settings_num_threads: u32,
+    settings_use_vad: bool,
+    settings_decoding_method: String,
+    settings_inject_strategy: String,
+    settings_key_delay_ms: u64,
+    settings_restore_clipboard: bool,
+    settings_conversion_mode: String,
+    settings_ui_lang: String,
 }
 
 impl GuiApp {
@@ -24,6 +35,16 @@ impl GuiApp {
             current_snapshot: GuiSnapshot::default(),
             show_settings: false,
             show_overlay_local: false,
+            settings_language: "zh".into(),
+            settings_provider: "cpu".into(),
+            settings_num_threads: 4,
+            settings_use_vad: true,
+            settings_decoding_method: "greedy_search".into(),
+            settings_inject_strategy: "auto".into(),
+            settings_key_delay_ms: 5,
+            settings_restore_clipboard: true,
+            settings_conversion_mode: "s2t".into(),
+            settings_ui_lang: "English".into(),
         }
     }
 
@@ -142,11 +163,121 @@ impl eframe::App for GuiApp {
         });
 
         if self.show_settings {
+            let mut pending_save: Option<crate::config::AppConfig> = None;
             egui::Window::new("Settings")
-                .open(&mut self.show_settings)
+                .default_size([400.0, 500.0])
                 .show(ctx, |ui| {
-                    ui.label("Settings panel placeholder - will be implemented in Phase 2.");
+                    egui::Grid::new("settings_grid")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.label("UI Language:");
+                            egui::ComboBox::from_id_salt("ui_lang")
+                                .selected_text(&self.settings_ui_lang)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.settings_ui_lang, "English".to_owned(), "English");
+                                    ui.selectable_value(&mut self.settings_ui_lang, "Chinese".to_owned(), "Chinese");
+                                });
+                            ui.end_row();
+
+                            ui.label("ASR Language:");
+                            let langs = ["zh", "en", "ja", "de", "fr", "es", "ko"];
+                            egui::ComboBox::from_id_salt("asr_lang")
+                                .selected_text(&self.settings_language)
+                                .show_ui(ui, |ui| {
+                                    for lang in &langs {
+                                        ui.selectable_value(&mut self.settings_language, lang.to_string(), *lang);
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label("Provider:");
+                            egui::ComboBox::from_id_salt("provider")
+                                .selected_text(&self.settings_provider)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.settings_provider, "cpu".to_owned(), "cpu");
+                                    ui.selectable_value(&mut self.settings_provider, "cuda".to_owned(), "cuda");
+                                });
+                            ui.end_row();
+
+                            ui.label("Num Threads:");
+                            ui.add(egui::DragValue::new(&mut self.settings_num_threads).range(1..=16));
+                            ui.end_row();
+
+                            ui.label("VAD:");
+                            ui.checkbox(&mut self.settings_use_vad, "Enabled");
+                            ui.end_row();
+
+                            ui.label("Decoding:");
+                            egui::ComboBox::from_id_salt("decoding")
+                                .selected_text(&self.settings_decoding_method)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.settings_decoding_method, "greedy_search".to_owned(), "greedy_search");
+                                    ui.selectable_value(&mut self.settings_decoding_method, "modified_beam_search".to_owned(), "modified_beam_search");
+                                });
+                            ui.end_row();
+
+                            ui.label("Inject:");
+                            egui::ComboBox::from_id_salt("inject")
+                                .selected_text(&self.settings_inject_strategy)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.settings_inject_strategy, "sendinput".to_owned(), "sendinput");
+                                    ui.selectable_value(&mut self.settings_inject_strategy, "clipboard".to_owned(), "clipboard");
+                                    ui.selectable_value(&mut self.settings_inject_strategy, "auto".to_owned(), "auto");
+                                });
+                            ui.end_row();
+
+                            ui.label("Key Delay (ms):");
+                            ui.add(egui::DragValue::new(&mut self.settings_key_delay_ms).range(0..=100));
+                            ui.end_row();
+
+                            ui.label("Restore Clipboard:");
+                            ui.checkbox(&mut self.settings_restore_clipboard, "Yes");
+                            ui.end_row();
+
+                            ui.label("Text Conversion:");
+                            let modes = ["none", "s2t", "t2s"];
+                            egui::ComboBox::from_id_salt("conversion")
+                                .selected_text(&self.settings_conversion_mode)
+                                .show_ui(ui, |ui| {
+                                    for mode in &modes {
+                                        ui.selectable_value(&mut self.settings_conversion_mode, mode.to_string(), *mode);
+                                    }
+                                });
+                            ui.end_row();
+                        });
+
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.label("Hotkeys (read-only):");
+                    ui.label("  Toggle Recording: Ctrl+Shift+F2");
+                    ui.label("  Cycle Language: Ctrl+Shift+L");
+                    ui.label("  Flush: Ctrl+Shift+Space");
+
+                    ui.add_space(15.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            let mut cfg = crate::config::AppConfig::default();
+                            cfg.language.language = self.settings_language.clone();
+                            cfg.asr.provider = self.settings_provider.clone();
+                            cfg.asr.num_threads = self.settings_num_threads;
+                            cfg.asr.use_vad = self.settings_use_vad;
+                            cfg.asr.decoding_method = self.settings_decoding_method.clone();
+                            cfg.injector.strategy = self.settings_inject_strategy.clone();
+                            cfg.injector.key_delay_ms = self.settings_key_delay_ms;
+                            cfg.injector.restore_clipboard = self.settings_restore_clipboard;
+                            cfg.conversion.mode = self.settings_conversion_mode.clone();
+                            cfg.ui.language = if self.settings_ui_lang == "Chinese" { "zh".into() } else { "en".into() };
+                            pending_save = Some(cfg);
+                            self.show_settings = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_settings = false;
+                        }
+                    });
                 });
+            if let Some(cfg) = pending_save {
+                self.send_action(GuiAction::SaveConfig(cfg));
+            }
         }
 
         if self.current_snapshot.is_recording {

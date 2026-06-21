@@ -668,8 +668,24 @@ fn main() -> Result<()> {
                         GuiAction::SetLanguage(lang) => {
                             *current_language.lock().unwrap() = lang;
                         }
-                        GuiAction::SaveConfig(_cfg) => {
-                            info!("GUI: Config save requested (full impl in Phase 2)");
+                        GuiAction::SaveConfig(cfg) => {
+                            info!("GUI: Saving config");
+                            if let Err(e) = cfg.save(&cli.config) {
+                                error!("Failed to save config: {}", e);
+                            } else {
+                                // Update runtime settings
+                                *current_language.lock().unwrap() = cfg.language.language.clone();
+                                config::settings::RUNTIME_VAD_ENABLED.store(cfg.asr.use_vad, Ordering::SeqCst);
+                                config::settings::RUNTIME_CONVERSION_MODE.store(
+                                    convert::ConversionMode::from_config(&cfg.conversion.mode).index() as u8,
+                                    Ordering::SeqCst,
+                                );
+                                *state.conversion_mode.lock().unwrap() = convert::ConversionMode::from_config(&cfg.conversion.mode);
+                                // Update GUI snapshot
+                                let _snap = gui_snapshot.lock().unwrap();
+                                // snapshot fields are read-only for now
+                                info!("Config saved and runtime settings updated");
+                            }
                         }
                         GuiAction::ShowOverlay(show) => {
                             info!("GUI: Overlay toggled: {}", show);
