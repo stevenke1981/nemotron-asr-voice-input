@@ -99,6 +99,13 @@ impl Strings {
         }
     }
 
+    pub fn tray_toggle_overlay(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Toggle Overlay",
+            UiLang::Chinese => "切換浮窗",
+        }
+    }
+
     pub fn tray_exit(&self) -> &'static str {
         match self.lang {
             UiLang::English => "Exit",

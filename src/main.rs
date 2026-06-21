@@ -649,6 +649,12 @@ fn main() -> Result<()> {
                         TrayAction::ShowMainWindow => {
                             info!("Tray: Show Main Window requested");
                         }
+                        TrayAction::ToggleOverlay => {
+                            let show = !show_overlay.load(Ordering::SeqCst);
+                            show_overlay.store(show, Ordering::SeqCst);
+                            info!("Tray: Toggling overlay: {}", show);
+                            let _ = gui_action_tx.send(GuiAction::ShowOverlay(show));
+                        }
                         TrayAction::Exit => {
                             info!("Tray: Exit requested");
                             state.is_running.store(false, Ordering::SeqCst);

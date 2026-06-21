@@ -302,6 +302,14 @@ impl eframe::App for GuiApp {
             }
         }
 
+        // Overlay viewport
+        let ov_text = if self.current_snapshot.latest_final_text.is_empty() {
+            &self.current_snapshot.latest_partial_text
+        } else {
+            &self.current_snapshot.latest_final_text
+        };
+        crate::ui::overlay::show_overlay_viewport(ctx, ov_text, self.show_overlay_local);
+
         if self.current_snapshot.is_recording {
             ctx.request_repaint();
         }
