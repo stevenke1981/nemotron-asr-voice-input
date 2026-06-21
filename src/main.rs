@@ -83,6 +83,8 @@ struct Cli {
 struct AppState {
     is_recording: AtomicBool,
     is_running: AtomicBool,
+    /// Latest non-empty transcript text (for injection on stop).
+    last_transcript: std::sync::Mutex<String>,
 }
 
 impl AppState {
@@ -90,6 +92,7 @@ impl AppState {
         Self {
             is_recording: AtomicBool::new(false),
             is_running: AtomicBool::new(true),
+            last_transcript: std::sync::Mutex::new(String::new()),
         }
     }
 }
@@ -363,6 +366,8 @@ fn main() -> Result<()> {
                     Ok(result) => {
                         if !result.text.is_empty() && result.text != last_text {
                             last_text = result.text.clone();
+                            // Update shared last_transcript for injection on stop
+                            *audio_state.last_transcript.lock().unwrap() = last_text.clone();
                             if audio_tx.send(result).is_err() {
                                 break;
                             }
@@ -460,7 +465,7 @@ fn main() -> Result<()> {
                     match action {
                         TrayAction::ToggleRecording => {
                             if state.is_recording.load(Ordering::SeqCst) {
-                                stop_recording(&state, &mut audio_capture, &tray_manager);
+                                stop_recording(&state, &mut audio_capture, &mut injector, &tray_manager);
                             } else {
                                 start_recording(&state, &mut audio_capture, &tray_manager);
                             }
@@ -521,7 +526,7 @@ fn handle_hotkey_action(
     action: HotkeyAction,
     state: &AppState,
     audio_capture: &mut AudioCapture,
-    _injector: &mut CompositeInjector,
+    injector: &mut CompositeInjector,
     language_list: &[String],
     current_language: &Arc<std::sync::Mutex<String>>,
     tray: &TrayManager,
@@ -530,7 +535,7 @@ fn handle_hotkey_action(
     match action {
         HotkeyAction::ToggleRecording => {
             if state.is_recording.load(Ordering::SeqCst) {
-                stop_recording(state, audio_capture, tray);
+                stop_recording(state, audio_capture, injector, tray);
             } else {
                 start_recording(state, audio_capture, tray);
             }
@@ -553,6 +558,7 @@ fn start_recording(
     tray: &TrayManager,
 ) {
     audio_capture.clear_ringbuf();
+    *state.last_transcript.lock().unwrap() = String::new();
 
     if let Err(e) = audio_capture.start() {
         error!("Failed to start recording: {}", e);
@@ -567,10 +573,11 @@ fn start_recording(
     info!("Recording started - speak now");
 }
 
-/// Stop recording.
+/// Stop recording and inject the last transcript.
 fn stop_recording(
     state: &AppState,
     audio_capture: &mut AudioCapture,
+    injector: &mut CompositeInjector,
     tray: &TrayManager,
 ) {
     state.is_recording.store(false, Ordering::SeqCst);
@@ -579,6 +586,16 @@ fn stop_recording(
         tray.show_notification("Error", &format!("Failed to stop recording: {}", e));
     }
     tray.set_recording_state(false);
+
+    // Inject the last non-empty transcript (for results that weren't final)
+    let text = state.last_transcript.lock().unwrap().clone();
+    if !text.is_empty() {
+        if let Err(e) = injector.inject_text(&text) {
+            error!("Text injection failed (on stop): {}", e);
+        } else {
+            info!("Injected (on stop): {}", text);
+        }
+    }
 
     let s = ui::tray::tray_strings();
     tray.show_notification(s.app_name(), s.notification_recording_stopped());
