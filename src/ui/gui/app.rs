@@ -26,10 +26,17 @@ pub struct GuiApp {
     settings_restore_clipboard: bool,
     settings_conversion_mode: String,
     settings_ui_lang: String,
+    // Window geometry tracking
+    window_x: f32,
+    window_y: f32,
+    window_w: f32,
+    window_h: f32,
 }
 
 impl GuiApp {
-    pub fn new(state: GuiSharedState) -> Self {
+    pub fn new(state: GuiSharedState, initial_pos: Option<egui::Pos2>, initial_size: Option<egui::Vec2>) -> Self {
+        let (wx, wy) = initial_pos.map(|p| (p.x, p.y)).unwrap_or((100.0, 100.0));
+        let (ww, wh) = initial_size.map(|s| (s.x, s.y)).unwrap_or((800.0, 600.0));
         Self {
             state,
             current_snapshot: GuiSnapshot::default(),
@@ -45,6 +52,10 @@ impl GuiApp {
             settings_restore_clipboard: true,
             settings_conversion_mode: "s2t".into(),
             settings_ui_lang: "English".into(),
+            window_x: wx,
+            window_y: wy,
+            window_w: ww,
+            window_h: wh,
         }
     }
 
@@ -62,6 +73,13 @@ impl GuiApp {
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_incoming();
+
+        // Track window geometry from egui input state
+        let screen = ctx.input(|i| i.screen_rect);
+        self.window_x = screen.left();
+        self.window_y = screen.top();
+        self.window_w = screen.width();
+        self.window_h = screen.height();
 
         egui::TopBottomPanel::top("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -267,6 +285,10 @@ impl eframe::App for GuiApp {
                             cfg.injector.restore_clipboard = self.settings_restore_clipboard;
                             cfg.conversion.mode = self.settings_conversion_mode.clone();
                             cfg.ui.language = if self.settings_ui_lang == "Chinese" { "zh".into() } else { "en".into() };
+                            cfg.ui.window_x = Some(self.window_x);
+                            cfg.ui.window_y = Some(self.window_y);
+                            cfg.ui.window_width = Some(self.window_w);
+                            cfg.ui.window_height = Some(self.window_h);
                             pending_save = Some(cfg);
                             self.show_settings = false;
                         }
@@ -291,6 +313,8 @@ pub fn spawn_gui(
     gui_rx: crossbeam::channel::Receiver<GuiSnapshot>,
     action_tx: crossbeam::channel::Sender<GuiAction>,
     show_overlay: Arc<AtomicBool>,
+    initial_pos: Option<egui::Pos2>,
+    initial_size: Option<egui::Vec2>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("egui-gui".into())
@@ -301,17 +325,25 @@ pub fn spawn_gui(
                 action_tx,
                 show_overlay,
             };
+            let mut vp = egui::ViewportBuilder::default()
+                .with_min_inner_size([400.0, 300.0])
+                .with_title("Nemotron Voice Input");
+            if let Some(pos) = initial_pos {
+                vp = vp.with_position(pos);
+            }
+            if let Some(size) = initial_size {
+                vp = vp.with_inner_size(size);
+            } else {
+                vp = vp.with_inner_size([800.0, 600.0]);
+            }
             let options = eframe::NativeOptions {
-                viewport: egui::ViewportBuilder::default()
-                    .with_inner_size([800.0, 600.0])
-                    .with_min_inner_size([400.0, 300.0])
-                    .with_title("Nemotron Voice Input"),
+                viewport: vp,
                 ..Default::default()
             };
             if let Err(e) = eframe::run_native(
                 "Nemotron Voice Input",
                 options,
-                Box::new(|_cc| Ok(Box::new(GuiApp::new(shared_state)))),
+                Box::new(|_cc| Ok(Box::new(GuiApp::new(shared_state, initial_pos, initial_size)))),
             ) {
                 tracing::error!("eframe GUI exited with error: {}", e);
             }

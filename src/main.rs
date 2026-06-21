@@ -29,6 +29,7 @@ use ui::config_window;
 use ui::gui::app::spawn_gui;
 use ui::gui::state::{GuiAction, GuiSnapshot, TranscriptEntry};
 
+
 /// Nemotron ASR Voice Input - Real-time speech recognition and text injection.
 #[derive(Parser, Debug)]
 #[command(name = "nemotron-voice-input", version = "0.1.0", about = "Real-time ASR voice input using Nemotron model")]
@@ -344,11 +345,19 @@ fn main() -> Result<()> {
     let (gui_action_tx, gui_action_rx) = crossbeam::channel::unbounded::<GuiAction>();
     let show_overlay = Arc::new(AtomicBool::new(false));
 
+    let initial_pos = app_config.ui.window_x
+        .zip(app_config.ui.window_y)
+        .map(|(x, y)| egui::Pos2::new(x, y));
+    let initial_size = app_config.ui.window_width
+        .zip(app_config.ui.window_height)
+        .map(|(w, h)| egui::Vec2::new(w, h));
     let _gui_handle = spawn_gui(
         gui_snapshot.clone(),
         gui_snapshot_rx,
         gui_action_tx.clone(),
         show_overlay.clone(),
+        initial_pos,
+        initial_size,
     );
 
     // ── Audio capture processing thread ──────────────────────────────

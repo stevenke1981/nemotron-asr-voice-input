@@ -125,6 +125,14 @@ pub struct LanguageConfig {
 pub struct UiConfig {
     /// UI language: "en" (English) or "zh" (Traditional Chinese)
     pub language: String,
+    /// eframe main window X position (None = system default)
+    pub window_x: Option<f32>,
+    /// eframe main window Y position (None = system default)
+    pub window_y: Option<f32>,
+    /// eframe main window width (None = default 800)
+    pub window_width: Option<f32>,
+    /// eframe main window height (None = default 600)
+    pub window_height: Option<f32>,
 }
 
 impl Default for AppConfig {
@@ -146,6 +154,10 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             language: "en".into(),
+            window_x: None,
+            window_y: None,
+            window_width: None,
+            window_height: None,
         }
     }
 }
