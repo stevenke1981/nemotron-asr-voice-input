@@ -92,6 +92,13 @@ impl Strings {
         }
     }
 
+    pub fn tray_show_main_window(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Show Main Window",
+            UiLang::Chinese => "顯示主視窗",
+        }
+    }
+
     pub fn tray_exit(&self) -> &'static str {
         match self.lang {
             UiLang::English => "Exit",

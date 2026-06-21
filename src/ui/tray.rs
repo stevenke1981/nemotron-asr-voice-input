@@ -23,6 +23,7 @@ const IDM_CYCLE_LANGUAGE: u32 = 1002;
 const IDM_FLUSH: u32 = 1004;
 const IDM_EXIT: u32 = 1003;
 const IDM_SETTINGS: u32 = 1005;
+const IDM_SHOW_MAIN_WINDOW: u32 = 1006;
 
 // ── Tray action channel ──────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ pub enum TrayAction {
     CycleLanguage,
     Flush,
     OpenSettings,
+    ShowMainWindow,
     Exit,
 }
 
@@ -160,6 +162,11 @@ unsafe extern "system" fn tray_wndproc(
                         let _ = tx.send(TrayAction::OpenSettings);
                     }
                 }
+                IDM_SHOW_MAIN_WINDOW => {
+                    if let Some(tx) = tray_sender() {
+                        let _ = tx.send(TrayAction::ShowMainWindow);
+                    }
+                }
                 IDM_EXIT => {
                     if let Some(tx) = tray_sender() {
                         let _ = tx.send(TrayAction::Exit);
@@ -191,6 +198,7 @@ unsafe fn show_context_menu(hwnd: HWND) {
         append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_FLUSH, s.tray_flush());
         AppendMenuW(menu, MENU_ITEM_FLAGS(0x800), 0, w!("")).ok();
         append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_SETTINGS, s.tray_settings());
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_SHOW_MAIN_WINDOW, s.tray_show_main_window());
         AppendMenuW(menu, MENU_ITEM_FLAGS(0x800), 0, w!("")).ok();
         append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_EXIT, s.tray_exit());
     }

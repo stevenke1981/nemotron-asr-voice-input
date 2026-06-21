@@ -637,6 +637,9 @@ fn main() -> Result<()> {
                                 &app_config,
                             );
                         }
+                        TrayAction::ShowMainWindow => {
+                            info!("Tray: Show Main Window requested");
+                        }
                         TrayAction::Exit => {
                             info!("Tray: Exit requested");
                             state.is_running.store(false, Ordering::SeqCst);
