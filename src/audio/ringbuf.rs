@@ -99,6 +99,7 @@ impl AudioRingBuffer {
     }
 
     /// Read samples without removing them.
+    #[allow(dead_code)]
     pub fn peek_slice(&self, output: &mut [f32]) -> usize {
         let read = self.read_pos.load(Ordering::Acquire);
         let write = self.write_pos.load(Ordering::Relaxed);
@@ -124,12 +125,14 @@ impl AudioRingBuffer {
 
     /// Return the capacity of the ring buffer.
     #[inline]
+    #[allow(dead_code)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Check if the buffer is empty.
     #[inline]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

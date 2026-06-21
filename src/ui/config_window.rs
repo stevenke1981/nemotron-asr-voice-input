@@ -58,7 +58,7 @@ fn ws(base: WINDOW_STYLE, extra: i32) -> WINDOW_STYLE {
 
 /// Send a window message (windows 0.62 requires Option<WPARAM/LPARAM>).
 #[inline]
-unsafe fn send(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+fn send(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe { SendMessageW(hwnd, msg, Some(wparam), Some(lparam)) }
 }
 
@@ -69,7 +69,7 @@ unsafe extern "system" fn config_wndproc(
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-) -> LRESULT {
+) -> LRESULT { unsafe {
     match msg {
         WM_COMMAND => {
             let id = (wparam.0 as u32) & 0xFFFF;
@@ -80,32 +80,32 @@ unsafe extern "system" fn config_wndproc(
                     LRESULT(0)
                 }
                 IDC_CANCEL if code == 0 => {
-                    unsafe { destroy(hwnd) };
+                    destroy(hwnd);
                     LRESULT(0)
                 }
                 IDC_UI_LANG if code == 1 => {
                     on_ui_lang_changed(hwnd);
                     LRESULT(0)
                 }
-                _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+                _ => DefWindowProcW(hwnd, msg, wparam, lparam),
             }
         }
         WM_CLOSE => {
-            unsafe { destroy(hwnd) };
+            destroy(hwnd);
             LRESULT(0)
         }
         WM_DESTROY => {
             SETTINGS_OPEN.store(false, Ordering::SeqCst);
             CONFIG_HWND.store(0, Ordering::SeqCst);
-            let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
             if ptr != 0 {
-                let _ = unsafe { Box::from_raw(ptr as *mut ConfigDialogData) };
+                let _ = Box::from_raw(ptr as *mut ConfigDialogData);
             }
             LRESULT(0)
         }
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
-}
+}}
 
 // ── Context data ──────────────────────────────────────────────────────
 
@@ -128,17 +128,17 @@ pub fn show_config_window(parent_hwnd: HWND, config: &AppConfig) {
     }
 
     let strings = Strings::new(UiLang::from_code(&config.ui.language));
-    unsafe { create_window(parent_hwnd, config.clone(), strings) };
+    create_window(parent_hwnd, config.clone(), strings);
 }
 
-unsafe fn create_window(parent: HWND, config: AppConfig, strings: Strings) {
-    let hinstance = match unsafe { GetModuleHandleA(None) } {
+fn create_window(parent: HWND, config: AppConfig, strings: Strings) { unsafe {
+    let hinstance = match GetModuleHandleA(None) {
         Ok(h) => h,
         Err(e) => { warn!("GetModuleHandle failed: {}", e); return; }
     };
 
     let class_name = w!("NemotronConfigWndCls");
-    let brush = unsafe { GetSysColorBrush(COLOR_WINDOW) };
+    let brush = GetSysColorBrush(COLOR_WINDOW);
     let wc = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(config_wndproc),
@@ -147,24 +147,22 @@ unsafe fn create_window(parent: HWND, config: AppConfig, strings: Strings) {
         lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
     };
-    unsafe { RegisterClassW(&wc) };
+    RegisterClassW(&wc);
 
     let title = format!("{} - {}", strings.app_name(), strings.settings_title());
     let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
 
-    let hwnd = match unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            class_name,
-            PCWSTR(title_wide.as_ptr()),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-            CW_USEDEFAULT, CW_USEDEFAULT, 460, 520,
-            Some(parent),
-            None,
-            Some(hinstance.into()),
-            None,
-        )
-    } {
+    let hwnd = match CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        class_name,
+        PCWSTR(title_wide.as_ptr()),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 460, 520,
+        Some(parent),
+        None,
+        Some(hinstance.into()),
+        None,
+    ) {
         Ok(w) => w,
         Err(e) => { warn!("Failed to create config window: {}", e); return; }
     };
@@ -172,18 +170,14 @@ unsafe fn create_window(parent: HWND, config: AppConfig, strings: Strings) {
     create_controls(hwnd, &config, &strings);
 
     let data = Box::new(ConfigDialogData { config, strings });
-    unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as isize);
-    }
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(data) as isize);
 
     SETTINGS_OPEN.store(true, Ordering::SeqCst);
     CONFIG_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
 
-    unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOW);
-    }
+    let _ = ShowWindow(hwnd, SW_SHOW);
     info!("Config window opened");
-}
+}}
 
 // ── Control creation helpers ─────────────────────────────────────────
 
@@ -198,7 +192,7 @@ fn model_status(config: &AppConfig) -> (usize, usize) {
     (ok, total)
 }
 
-unsafe fn add_static(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) {
+fn add_static(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let _ = CreateWindowExW(
@@ -209,7 +203,7 @@ unsafe fn add_static(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
-unsafe fn add_groupbox(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) -> i32 {
+fn add_groupbox(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) -> i32 {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let _ = CreateWindowExW(
@@ -221,7 +215,7 @@ unsafe fn add_groupbox(hwnd: HWND, text: &str, x: i32, y: i32, w: i32, h: i32) -
     y + h
 }
 
-unsafe fn add_combobox(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, drop_h: i32) -> HWND {
+fn add_combobox(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, drop_h: i32) -> HWND {
     unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(), w!("ComboBox"), PCWSTR::null(),
@@ -233,7 +227,7 @@ unsafe fn add_combobox(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, drop_h: i32)
     }
 }
 
-unsafe fn add_edit(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, h: i32) -> HWND {
+fn add_edit(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, h: i32) -> HWND {
     unsafe {
         CreateWindowExW(
             WINDOW_EX_STYLE::default(), w!("Edit"), PCWSTR::null(),
@@ -245,7 +239,7 @@ unsafe fn add_edit(hwnd: HWND, id: u32, x: i32, y: i32, w: i32, h: i32) -> HWND 
     }
 }
 
-unsafe fn add_checkbox(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, h: i32, checked: bool) {
+fn add_checkbox(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, h: i32, checked: bool) {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let chk = unsafe {
         CreateWindowExW(
@@ -256,10 +250,10 @@ unsafe fn add_checkbox(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, 
         )
         .unwrap_or(HWND(ptr::null_mut()))
     };
-    unsafe { let _ = send(chk, BM_SETCHECK, WPARAM(if checked { 1 } else { 0 }), LPARAM(0)); }
+    send(chk, BM_SETCHECK, WPARAM(if checked { 1 } else { 0 }), LPARAM(0));
 }
 
-unsafe fn add_button(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, h: i32) {
+fn add_button(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, h: i32) {
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
         let _ = CreateWindowExW(
@@ -273,50 +267,50 @@ unsafe fn add_button(hwnd: HWND, id: u32, text: &str, x: i32, y: i32, w: i32, h:
 
 // ── ComboBox helpers ──────────────────────────────────────────────────
 
-unsafe fn combo_add(combo: HWND, items: &[&str]) {
+fn combo_add(combo: HWND, items: &[&str]) {
     if combo.0.is_null() { return; }
     for item in items {
         let w: Vec<u16> = item.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe { let _ = send(combo, CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize)); }
+        send(combo, CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize));
     }
 }
 
-unsafe fn combo_sel(combo: HWND, idx: i32) {
+fn combo_sel(combo: HWND, idx: i32) {
     if combo.0.is_null() || idx < 0 { return; }
-    unsafe { let _ = send(combo, CB_SETCURSEL, WPARAM(idx as usize), LPARAM(0)); }
+    send(combo, CB_SETCURSEL, WPARAM(idx as usize), LPARAM(0));
 }
 
-unsafe fn combo_sel_str(combo: HWND, target: &str) {
+fn combo_sel_str(combo: HWND, target: &str) {
     if combo.0.is_null() { return; }
-    let count = unsafe { send(combo, CB_GETCOUNT, WPARAM(0), LPARAM(0)) }.0 as i32;
+    let count = send(combo, CB_GETCOUNT, WPARAM(0), LPARAM(0)).0 as i32;
     for i in 0..count {
-        let len = unsafe { send(combo, CB_GETLBTEXTLEN, WPARAM(i as usize), LPARAM(0)) }.0 as usize;
+        let len = send(combo, CB_GETLBTEXTLEN, WPARAM(i as usize), LPARAM(0)).0 as usize;
         if len == 0 { continue; }
         let mut buf = vec![0u16; len + 1];
-        unsafe { send(combo, CB_GETLBTEXT, WPARAM(i as usize), LPARAM(buf.as_mut_ptr() as isize)); }
+        send(combo, CB_GETLBTEXT, WPARAM(i as usize), LPARAM(buf.as_mut_ptr() as isize));
         buf.truncate(buf.iter().position(|&c| c == 0).unwrap_or(buf.len()));
-        if let Ok(s) = String::from_utf16(&buf) { if s == target { unsafe { let _ = send(combo, CB_SETCURSEL, WPARAM(i as usize), LPARAM(0)); } return; } }
+        if let Ok(s) = String::from_utf16(&buf) { if s == target { send(combo, CB_SETCURSEL, WPARAM(i as usize), LPARAM(0)); return; } }
     }
 }
 
-unsafe fn combo_text(combo: HWND) -> String {
+fn combo_text(combo: HWND) -> String {
     if combo.0.is_null() { return String::new(); }
-    let sel = unsafe { send(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)) }.0 as i32;
+    let sel = send(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 as i32;
     if sel < 0 { return String::new(); }
-    let len = unsafe { send(combo, CB_GETLBTEXTLEN, WPARAM(sel as usize), LPARAM(0)) }.0 as usize;
+    let len = send(combo, CB_GETLBTEXTLEN, WPARAM(sel as usize), LPARAM(0)).0 as usize;
     if len == 0 { return String::new(); }
     let mut buf = vec![0u16; len + 1];
-    unsafe { send(combo, CB_GETLBTEXT, WPARAM(sel as usize), LPARAM(buf.as_mut_ptr() as isize)); }
+    send(combo, CB_GETLBTEXT, WPARAM(sel as usize), LPARAM(buf.as_mut_ptr() as isize));
     buf.truncate(buf.iter().position(|&c| c == 0).unwrap_or(buf.len()));
     String::from_utf16(&buf).unwrap_or_default()
 }
 
-unsafe fn is_checked(chk: HWND) -> bool {
+fn is_checked(chk: HWND) -> bool {
     if chk.0.is_null() { return false; }
-    unsafe { send(chk, BM_GETCHECK, WPARAM(0), LPARAM(0)) }.0 != 0
+    send(chk, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 != 0
 }
 
-unsafe fn edit_text(edit: HWND) -> String {
+fn edit_text(edit: HWND) -> String {
     if edit.0.is_null() { return String::new(); }
     let len = unsafe { GetWindowTextLengthW(edit) };
     if len == 0 { return String::new(); }
@@ -326,7 +320,7 @@ unsafe fn edit_text(edit: HWND) -> String {
     String::from_utf16(&buf).unwrap_or_default()
 }
 
-unsafe fn edit_set(edit: HWND, text: &str) {
+fn edit_set(edit: HWND, text: &str) {
     if edit.0.is_null() { return; }
     let w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe { let _ = SetWindowTextW(edit, PCWSTR(w.as_ptr())); }
@@ -340,27 +334,27 @@ const ASR_LANG: &[&str] = &[
     "nl", "pl", "sv", "el", "he", "id",
 ];
 
-unsafe fn fill_asr_lang(combo: HWND, s: &Strings) {
+fn fill_asr_lang(combo: HWND, s: &Strings) {
     for &code in ASR_LANG {
         let item = format!("{} ({})", s.language_display_name(code), code);
         let w: Vec<u16> = item.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe { let _ = send(combo, CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize)); }
+        send(combo, CB_ADDSTRING, WPARAM(0), LPARAM(w.as_ptr() as isize));
     }
 }
 
-unsafe fn pick_asr_lang(combo: HWND, target: &str) {
+fn pick_asr_lang(combo: HWND, target: &str) {
     if combo.0.is_null() { return; }
-    let count = unsafe { send(combo, CB_GETCOUNT, WPARAM(0), LPARAM(0)) }.0 as i32;
+    let count = send(combo, CB_GETCOUNT, WPARAM(0), LPARAM(0)).0 as i32;
     for i in 0..count {
-        let len = unsafe { send(combo, CB_GETLBTEXTLEN, WPARAM(i as usize), LPARAM(0)) }.0 as usize;
+        let len = send(combo, CB_GETLBTEXTLEN, WPARAM(i as usize), LPARAM(0)).0 as usize;
         if len == 0 { continue; }
         let mut buf = vec![0u16; len + 1];
-        unsafe { send(combo, CB_GETLBTEXT, WPARAM(i as usize), LPARAM(buf.as_mut_ptr() as isize)); }
+        send(combo, CB_GETLBTEXT, WPARAM(i as usize), LPARAM(buf.as_mut_ptr() as isize));
         buf.truncate(buf.iter().position(|&c| c == 0).unwrap_or(buf.len()));
         if let Ok(text) = String::from_utf16(&buf) {
             if let Some(p) = text.rfind('(') {
                 if text[p + 1..].trim_end_matches(')') == target {
-                    unsafe { let _ = send(combo, CB_SETCURSEL, WPARAM(i as usize), LPARAM(0)); }
+                    send(combo, CB_SETCURSEL, WPARAM(i as usize), LPARAM(0));
                     return;
                 }
             }
@@ -374,7 +368,7 @@ fn parse_lang(text: &str) -> &str {
 
 // ── Control layout ────────────────────────────────────────────────────
 
-unsafe fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
+fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
     let mut y = 14;
 
     // General
@@ -457,7 +451,7 @@ unsafe fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
 
 // ── Handlers ──────────────────────────────────────────────────────────
 
-unsafe fn on_save(hwnd: HWND) {
+fn on_save(hwnd: HWND) {
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     if ptr == 0 { return; }
     let data = unsafe { &mut *(ptr as *mut ConfigDialogData) };
@@ -484,15 +478,15 @@ unsafe fn on_save(hwnd: HWND) {
     let k = find(IDC_KEY_DELAY);
     let r = find(IDC_RESTORE_CLIP);
 
-    data.config.ui.language = if unsafe { combo_text(u) } == "中文" { "zh".into() } else { "en".into() };
-    data.config.language.language = parse_lang(&unsafe { combo_text(a) }).to_string();
-    data.config.asr.provider = unsafe { combo_text(p) };
-    data.config.asr.decoding_method = unsafe { combo_text(d) };
-    data.config.asr.use_vad = unsafe { is_checked(v) };
-    if let Ok(n) = unsafe { edit_text(t) }.parse::<u32>() { data.config.asr.num_threads = n; }
-    data.config.injector.strategy = unsafe { combo_text(s) };
-    if let Ok(n) = unsafe { edit_text(k) }.parse::<u64>() { data.config.injector.key_delay_ms = n; }
-    data.config.injector.restore_clipboard = unsafe { is_checked(r) };
+    data.config.ui.language = if combo_text(u) == "中文" { "zh".into() } else { "en".into() };
+    data.config.language.language = parse_lang(&combo_text(a)).to_string();
+    data.config.asr.provider = combo_text(p);
+    data.config.asr.decoding_method = combo_text(d);
+    data.config.asr.use_vad = is_checked(v);
+    if let Ok(n) = edit_text(t).parse::<u32>() { data.config.asr.num_threads = n; }
+    data.config.injector.strategy = combo_text(s);
+    if let Ok(n) = edit_text(k).parse::<u64>() { data.config.injector.key_delay_ms = n; }
+    data.config.injector.restore_clipboard = is_checked(r);
 
     match data.config.save("config.toml") {
         Ok(()) => {
@@ -505,10 +499,10 @@ unsafe fn on_save(hwnd: HWND) {
         }
     }
 
-    unsafe { destroy(hwnd) };
+    destroy(hwnd);
 }
 
-unsafe fn on_ui_lang_changed(hwnd: HWND) {
+fn on_ui_lang_changed(hwnd: HWND) {
     let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     if ptr == 0 { return; }
     let data = unsafe { &mut *(ptr as *mut ConfigDialogData) };
@@ -520,7 +514,7 @@ unsafe fn on_ui_lang_changed(hwnd: HWND) {
         if unsafe { GetDlgCtrlID(child) } == IDC_UI_LANG as i32 { break child; }
     };
 
-    let text = unsafe { combo_text(u) };
+    let text = combo_text(u);
     let new = if text == "中文" { UiLang::Chinese } else { UiLang::English };
     if new == data.strings.lang { return; }
 
@@ -528,10 +522,10 @@ unsafe fn on_ui_lang_changed(hwnd: HWND) {
     let config = data.config.clone();
     let parent = unsafe { GetAncestor(hwnd, GA_PARENT) };
 
-    unsafe { destroy(hwnd) };
+    destroy(hwnd);
     show_config_window(parent, &config);
 }
 
-unsafe fn destroy(hwnd: HWND) {
+fn destroy(hwnd: HWND) {
     unsafe { let _ = DestroyWindow(hwnd); }
 }

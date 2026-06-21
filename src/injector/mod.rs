@@ -44,9 +44,11 @@ pub enum InjectorError {
     SendInputFailed(String),
 
     #[error("UIAutomation failed: {0}")]
+    #[allow(dead_code)]
     UiautomationFailed(String),
 
     #[error("Clipboard operation failed: {0}")]
+    #[allow(dead_code)]
     ClipboardFailed(String),
 
     #[error("All injection strategies failed")]

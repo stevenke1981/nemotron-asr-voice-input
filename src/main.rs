@@ -268,6 +268,9 @@ fn main() -> Result<()> {
                 Ok(e) => e,
                 Err(e) => {
                     error!("Failed to create ASR engine: {}", e);
+                    error!("  Models may be missing or corrupt. Run `nemotron-voice-input --download-models` to download.");
+                    error!("  Or run `nemotron-voice-input --model-status` to check model status.");
+                    info!("ASR engine unavailable — recording will not produce transcripts");
                     return;
                 }
             };
@@ -499,6 +502,9 @@ fn start_recording(
     }
     state.is_recording.store(true, Ordering::SeqCst);
     tray.set_recording_state(true);
+
+    let s = ui::tray::tray_strings();
+    tray.show_notification(s.app_name(), s.notification_recording_started());
     info!("Recording started - speak now");
 }
 
@@ -513,6 +519,9 @@ fn stop_recording(
         error!("Failed to stop recording: {}", e);
     }
     tray.set_recording_state(false);
+
+    let s = ui::tray::tray_strings();
+    tray.show_notification(s.app_name(), s.notification_recording_stopped());
     info!("Recording stopped");
 }
 

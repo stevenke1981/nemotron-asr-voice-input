@@ -140,11 +140,13 @@ impl AudioCapture {
     }
 
     /// Check if currently capturing.
+    #[allow(dead_code)]
     pub fn is_capturing(&self) -> bool {
         self.is_capturing.load(Ordering::SeqCst)
     }
 
     /// Get the audio sample rate.
+    #[allow(dead_code)]
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }

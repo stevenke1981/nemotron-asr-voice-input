@@ -48,6 +48,7 @@ impl AsrConfig {
 
 /// Language code to numeric ID mapping for the Nemotron model.
 /// Reference: https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+#[allow(dead_code)]
 pub fn language_to_lang_id(language: &str) -> Option<i32> {
     match language {
         "en" => Some(0),   // English

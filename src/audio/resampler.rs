@@ -2,12 +2,14 @@ use anyhow::Result;
 
 /// Simple audio resampler.
 /// For MVP, this handles basic cases. If no resampling is needed it's a no-op.
+#[allow(dead_code)]
 pub struct AudioResampler {
     from_rate: u32,
     to_rate: u32,
     channels: u16,
 }
 
+#[allow(dead_code)]
 impl AudioResampler {
     pub fn new(from_rate: u32, to_rate: u32, channels: u16) -> Self {
         Self {

@@ -23,6 +23,7 @@ impl UiLang {
         }
     }
 
+    #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
         match self {
             UiLang::English => "English",

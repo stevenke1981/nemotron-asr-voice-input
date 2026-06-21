@@ -203,11 +203,13 @@ impl AppConfig {
     }
 
     /// Get the model directory path.
+    #[allow(dead_code)]
     pub fn model_dir(&self) -> &std::path::Path {
         &self.model_dir
     }
 
     /// Get the chunk size in samples.
+    #[allow(dead_code)]
     pub fn chunk_samples(&self) -> usize {
         (self.audio.sample_rate as u64 * self.audio.chunk_size_ms as u64 / 1000) as usize
     }

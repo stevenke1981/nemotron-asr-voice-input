@@ -29,7 +29,9 @@ pub trait AsrEngine: Send {
 pub struct TranscriptResult {
     pub text: String,
     pub is_final: bool,
+    #[allow(dead_code)]
     pub segment_id: u32,
+    #[allow(dead_code)]
     pub confidence: f32,
 }
 
@@ -51,21 +53,25 @@ pub enum AsrError {
     ModelLoadError(String),
 
     #[error("Audio feed error: {0}")]
+    #[allow(dead_code)]
     AudioFeedError(String),
 
     #[error("Decode error: {0}")]
+    #[allow(dead_code)]
     DecodeError(String),
 
     #[error("Engine not initialized")]
     NotInitialized,
 
     #[error("Language not supported: {0}")]
+    #[allow(dead_code)]
     UnsupportedLanguage(String),
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
     #[error("{0}")]
+    #[allow(dead_code)]
     Other(String),
 }
 
@@ -78,6 +84,7 @@ pub fn create_asr_engine(config: &AsrConfig) -> Result<Box<dyn AsrEngine>, AsrEr
 
 /// Language ID mapping for Nemotron model.
 /// Reference: https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+#[allow(dead_code)]
 pub fn language_name_to_code(name: &str) -> Option<&'static str> {
     match name.to_lowercase().as_str() {
         "english" | "en" | "en_us" => Some("en"),
