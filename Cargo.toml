@@ -1,6 +1,6 @@
 [package]
 name = "nemotron-voice-input"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 description = "Nemotron ASR voice input - real-time speech recognition and text injection for Windows"
 
