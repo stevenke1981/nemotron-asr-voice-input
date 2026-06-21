@@ -248,6 +248,9 @@ fn main() -> Result<()> {
         }
     }
 
+    // Show settings GUI on first launch
+    config_window::show_config_window(tray_manager.hwnd(), &app_config);
+
     // Store tray sender for Settings window
     let _tray_tx_for_settings = tray_tx.clone();
 

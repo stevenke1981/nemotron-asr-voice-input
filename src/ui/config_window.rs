@@ -157,7 +157,7 @@ fn create_window(parent: HWND, config: AppConfig, strings: Strings) { unsafe {
         class_name,
         PCWSTR(title_wide.as_ptr()),
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 460, 520,
+        CW_USEDEFAULT, CW_USEDEFAULT, 460, 570,
         Some(parent),
         None,
         Some(hinstance.into()),
@@ -367,84 +367,94 @@ fn parse_lang(text: &str) -> &str {
 }
 
 // ── Control layout ────────────────────────────────────────────────────
+//
+// Layout strategy: `gb` tracks each groupbox top edge. `add_groupbox` draws
+// the frame and returns the bottom edge. Inner controls use `cy` (starting
+// at `gb + padding`) so they render inside the groupbox. `y` advances to
+// the groupbox bottom + gap for the next section.
 
 fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
-    let mut y = 14;
+    let mut y = 12;
+    let gap = 4;
 
-    // General
-    y = add_groupbox(hwnd, s.settings_general_section(), 8, y - 4, 432, 50);
-    add_static(hwnd, s.settings_ui_language(), 16, y, 130, 20);
-    let ui_lang = add_combobox(hwnd, IDC_UI_LANG, 150, y - 2, 280, 180);
+    // ── General section ──
+    let gb = y;
+    add_groupbox(hwnd, s.settings_general_section(), 8, gb, 432, 44);
+    add_static(hwnd, s.settings_ui_language(), 16, gb + 14, 130, 20);
+    let ui_lang = add_combobox(hwnd, IDC_UI_LANG, 150, gb + 12, 280, 180);
     combo_add(ui_lang, &["English", "中文"]);
     combo_sel(ui_lang, if config.ui.language == "zh" { 1 } else { 0 });
-    y += 26;
+    y = gb + 44 + gap;
 
-    // ASR
-    y = add_groupbox(hwnd, s.settings_asr_section(), 8, y, 432, 134);
-    y += 20;
-    add_static(hwnd, s.settings_asr_language(), 16, y, 130, 20);
-    let asr_lang = add_combobox(hwnd, IDC_ASR_LANG, 150, y - 2, 280, 200);
+    // ── ASR section (4 columns + checkbox) ──
+    let gb = y;
+    add_groupbox(hwnd, s.settings_asr_section(), 8, gb, 432, 166);
+    let mut cy = gb + 16;
+    add_static(hwnd, s.settings_asr_language(), 16, cy, 130, 20);
+    let asr_lang = add_combobox(hwnd, IDC_ASR_LANG, 150, cy - 2, 280, 200);
     fill_asr_lang(asr_lang, s);
     pick_asr_lang(asr_lang, &config.language.language);
-    y += 26;
+    cy += 26;
 
-    add_static(hwnd, s.settings_provider(), 16, y, 130, 20);
-    let provider = add_combobox(hwnd, IDC_PROVIDER, 150, y - 2, 280, 100);
+    add_static(hwnd, s.settings_provider(), 16, cy, 130, 20);
+    let provider = add_combobox(hwnd, IDC_PROVIDER, 150, cy - 2, 280, 100);
     combo_add(provider, &["cpu", "cuda"]);
     combo_sel_str(provider, &config.asr.provider);
-    y += 26;
+    cy += 26;
 
-    add_static(hwnd, s.settings_decoding(), 16, y, 130, 20);
-    let decoding = add_combobox(hwnd, IDC_DECODING, 150, y - 2, 280, 100);
+    add_static(hwnd, s.settings_decoding(), 16, cy, 130, 20);
+    let decoding = add_combobox(hwnd, IDC_DECODING, 150, cy - 2, 280, 100);
     combo_add(decoding, &["greedy_search", "modified_beam_search"]);
     combo_sel_str(decoding, &config.asr.decoding_method);
-    y += 26;
+    cy += 26;
 
-    add_static(hwnd, s.settings_threads(), 16, y, 130, 20);
-    let threads = add_edit(hwnd, IDC_THREADS, 150, y - 2, 60, 22);
+    add_static(hwnd, s.settings_threads(), 16, cy, 130, 20);
+    let threads = add_edit(hwnd, IDC_THREADS, 150, cy - 2, 60, 22);
     edit_set(threads, &config.asr.num_threads.to_string());
-    y += 26;
+    cy += 26;
 
-    add_checkbox(hwnd, IDC_VAD, s.settings_vad(), 16, y, 400, 22, config.asr.use_vad);
-    y += 28;
+    add_checkbox(hwnd, IDC_VAD, s.settings_vad(), 16, cy, 400, 22, config.asr.use_vad);
+    y = gb + 166 + gap;
 
-    // Injection
-    y = add_groupbox(hwnd, s.settings_injection_section(), 8, y, 432, 104);
-    y += 20;
-    add_static(hwnd, s.settings_inject_strategy(), 16, y, 130, 20);
-    let strategy = add_combobox(hwnd, IDC_STRATEGY, 150, y - 2, 280, 120);
+    // ── Injection section (2 columns + checkbox) ──
+    let gb = y;
+    add_groupbox(hwnd, s.settings_injection_section(), 8, gb, 432, 104);
+    let mut cy = gb + 16;
+    add_static(hwnd, s.settings_inject_strategy(), 16, cy, 130, 20);
+    let strategy = add_combobox(hwnd, IDC_STRATEGY, 150, cy - 2, 280, 120);
     combo_add(strategy, &["auto", "sendinput", "uiautomation", "clipboard"]);
     combo_sel_str(strategy, &config.injector.strategy);
-    y += 26;
+    cy += 26;
 
-    add_static(hwnd, s.settings_key_delay(), 16, y, 130, 20);
-    let key_delay = add_edit(hwnd, IDC_KEY_DELAY, 150, y - 2, 60, 22);
+    add_static(hwnd, s.settings_key_delay(), 16, cy, 130, 20);
+    let key_delay = add_edit(hwnd, IDC_KEY_DELAY, 150, cy - 2, 60, 22);
     edit_set(key_delay, &config.injector.key_delay_ms.to_string());
-    y += 26;
+    cy += 26;
 
-    add_checkbox(hwnd, IDC_RESTORE_CLIP, s.settings_restore_clipboard(), 16, y, 400, 22, config.injector.restore_clipboard);
-    y += 28;
+    add_checkbox(hwnd, IDC_RESTORE_CLIP, s.settings_restore_clipboard(), 16, cy, 400, 22, config.injector.restore_clipboard);
+    y = gb + 104 + gap;
 
-    // Hotkeys
-    y = add_groupbox(hwnd, s.settings_hotkeys_section(), 8, y, 432, 80);
-    y += 18;
+    // ── Hotkeys section (3 lines) ──
+    let gb = y;
+    add_groupbox(hwnd, s.settings_hotkeys_section(), 8, gb, 432, 82);
+    let mut cy = gb + 16;
     let hotkeys = [
         (s.hotkey_toggle_label(), "Ctrl+Alt+R"),
         (s.hotkey_lang_label(), "Ctrl+Alt+L"),
         (s.hotkey_flush_label(), "Ctrl+Alt+Space"),
     ];
     for (action, key) in &hotkeys {
-        add_static(hwnd, &s.settings_hotkey_line(action, key), 22, y, 400, 20);
-        y += 20;
+        add_static(hwnd, &s.settings_hotkey_line(action, key), 22, cy, 400, 20);
+        cy += 20;
     }
-    y += 6;
+    y = gb + 82 + gap;
 
-    // Model status
+    // ── Model status ──
     let (ok, total) = model_status(config);
     add_static(hwnd, &s.settings_model_status(ok, total), 16, y, 400, 20);
-    y += 32;
+    y += 28;
 
-    // Buttons
+    // ── Buttons ──
     add_button(hwnd, IDC_SAVE, s.settings_save(), 150, y, 90, 28);
     add_button(hwnd, IDC_CANCEL, s.settings_cancel(), 260, y, 90, 28);
 }
