@@ -89,6 +89,68 @@ struct Converters {
 
 static CONVERTERS: OnceLock<Converters> = OnceLock::new();
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_s2t_conversion() {
+        let opencc = OpenCC::from_config(BuiltinConfig::S2t).unwrap();
+        let result = opencc.convert("这是测试");
+        assert_eq!(result, "這是測試", "S2T failed: got '{}'", result);
+    }
+
+    #[test]
+    fn test_t2s_conversion() {
+        let opencc = OpenCC::from_config(BuiltinConfig::T2s).unwrap();
+        let result = opencc.convert("這是測試");
+        assert_eq!(result, "这是测试", "T2S failed: got '{}'", result);
+    }
+
+    #[test]
+    fn test_convert_text_s2t() {
+        init_converters().unwrap();
+        let result = convert_text("这是测试", ConversionMode::SimplifiedToTraditional);
+        assert_eq!(result, "這是測試", "convert_text S2T failed: got '{}'", result);
+    }
+
+    #[test]
+    fn test_convert_text_t2s() {
+        init_converters().unwrap();
+        let result = convert_text("這是測試", ConversionMode::TraditionalToSimplified);
+        assert_eq!(result, "这是测试", "convert_text T2S failed: got '{}'", result);
+    }
+
+    #[test]
+    fn test_convert_text_none() {
+        let result = convert_text("这是测试", ConversionMode::None);
+        assert_eq!(result, "这是测试");
+    }
+
+    #[test]
+    fn test_convert_text_empty() {
+        let result = convert_text("", ConversionMode::SimplifiedToTraditional);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_conversion_mode_from_config() {
+        assert_eq!(ConversionMode::from_config("s2t"), ConversionMode::SimplifiedToTraditional);
+        assert_eq!(ConversionMode::from_config("t2s"), ConversionMode::TraditionalToSimplified);
+        assert_eq!(ConversionMode::from_config("none"), ConversionMode::None);
+        assert_eq!(ConversionMode::from_config("invalid"), ConversionMode::None);
+    }
+
+    #[test]
+    fn test_conversion_mode_index_roundtrip() {
+        for mode in ConversionMode::all() {
+            let idx = mode.index();
+            let back = ConversionMode::from_index(idx);
+            assert_eq!(*mode, back, "Index roundtrip failed for {:?}", mode);
+        }
+    }
+}
+
 /// Initialize converters (call once before any conversion).
 pub fn init_converters() -> Result<(), OpenCCError> {
     if CONVERTERS.get().is_none() {

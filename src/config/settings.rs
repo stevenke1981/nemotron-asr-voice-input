@@ -1,10 +1,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 
 /// Runtime VAD toggle — shared between main thread and audio processing thread.
 /// Updated from settings window at runtime (no restart required).
 pub static RUNTIME_VAD_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Runtime conversion mode (0=None, 1=S2T, 2=T2S).
+/// Updated from settings window at runtime.
+pub static RUNTIME_CONVERSION_MODE: AtomicU8 = AtomicU8::new(0);
+
+/// Helper to decode RUNTIME_CONVERSION_MODE to a crate::convert::ConversionMode.
+#[inline]
+pub fn runtime_conversion_mode() -> crate::convert::ConversionMode {
+    match RUNTIME_CONVERSION_MODE.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => crate::convert::ConversionMode::SimplifiedToTraditional,
+        2 => crate::convert::ConversionMode::TraditionalToSimplified,
+        _ => crate::convert::ConversionMode::None,
+    }
+}
 
 /// Top-level application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -264,8 +264,10 @@ fn main() -> Result<()> {
     // Store PTT VK for key-up detection
     *state.ptt_vk.lock().unwrap() = app_config.hotkey.ptt_vk;
 
-    // Initialize the conversion mode from config
-    *state.conversion_mode.lock().unwrap() = convert::ConversionMode::from_config(&app_config.conversion.mode);
+    // Initialize the conversion mode from config (also set runtime static)
+    let initial_mode = convert::ConversionMode::from_config(&app_config.conversion.mode);
+    *state.conversion_mode.lock().unwrap() = initial_mode;
+    config::settings::RUNTIME_CONVERSION_MODE.store(initial_mode.index() as u8, std::sync::atomic::Ordering::SeqCst);
 
     let toggle_reg = hotkey_manager.actual_key(HotkeyAction::ToggleRecording)
         .map(|(m, v)| format_hotkey(m, v))
@@ -355,6 +357,7 @@ fn main() -> Result<()> {
             let mut resample_buf = vec![0.0f32; chunk_target];
             let mut last_text = String::new();
             let mut last_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
+            let mut was_recording = false;
 
             info!(
                 "Audio processing: capture {} Hz → target {} Hz, chunk {} → {} samples",
@@ -362,7 +365,15 @@ fn main() -> Result<()> {
             );
 
             while audio_state.is_running.load(Ordering::SeqCst) {
-                if !audio_state.is_recording.load(Ordering::SeqCst) {
+                let is_recording = audio_state.is_recording.load(Ordering::SeqCst);
+
+                // Detect recording start → reset dedup state so each session is clean
+                if is_recording && !was_recording {
+                    last_text.clear();
+                }
+                was_recording = is_recording;
+
+                if !is_recording {
                     std::thread::sleep(Duration::from_millis(50));
                     continue;
                 }
@@ -522,8 +533,8 @@ fn main() -> Result<()> {
                             {
                                 info!("Transcript: {}", result.text);
                                 if result.is_final {
-                                    // Apply conversion mode
-                                    let mode = *state.conversion_mode.lock().unwrap();
+                                    // Apply conversion mode (read runtime static for live updates)
+                                    let mode = config::settings::runtime_conversion_mode();
                                     let text = convert::convert_text(&result.text, mode);
                                     if let Err(e) = injector.inject_text(&text) {
                                         error!("Text injection failed: {}", e);
@@ -673,7 +684,7 @@ fn stop_recording(
     // Inject the last non-empty transcript (for results that weren't final)
     let text = state.last_transcript.lock().unwrap().clone();
     if !text.is_empty() {
-        let mode = *state.conversion_mode.lock().unwrap();
+        let mode = config::settings::runtime_conversion_mode();
         let converted = convert::convert_text(&text, mode);
         if let Err(e) = injector.inject_text(&converted) {
             error!("Text injection failed (on stop): {}", e);

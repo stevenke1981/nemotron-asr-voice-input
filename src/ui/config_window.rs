@@ -551,6 +551,8 @@ fn on_save(hwnd: HWND) {
     if conv_sel >= 0 {
         let mode = crate::convert::ConversionMode::from_index(conv_sel as usize);
         data.config.conversion.mode = mode.to_config().to_string();
+        // Apply conversion mode at runtime
+        crate::config::settings::RUNTIME_CONVERSION_MODE.store(conv_sel as u8, std::sync::atomic::Ordering::SeqCst);
     }
 
     store_shared_config(&data.config);
