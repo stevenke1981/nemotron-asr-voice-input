@@ -31,4 +31,6 @@ pub struct GuiSnapshot {
     pub latest_final_text: String,
     pub latest_partial_text: String,
     pub history: Vec<TranscriptEntry>,
+    /// Set by main when tray "Settings" is clicked; consumed by GUI to open settings panel.
+    pub show_settings_requested: bool,
 }

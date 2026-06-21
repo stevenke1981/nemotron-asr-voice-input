@@ -125,6 +125,8 @@ pub struct LanguageConfig {
 pub struct UiConfig {
     /// UI language: "en" (English) or "zh" (Traditional Chinese)
     pub language: String,
+    /// egui theme: "Dark" or "Light"
+    pub theme: String,
     /// eframe main window X position (None = system default)
     pub window_x: Option<f32>,
     /// eframe main window Y position (None = system default)
@@ -154,6 +156,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             language: "en".into(),
+            theme: "Dark".into(),
             window_x: None,
             window_y: None,
             window_width: None,

@@ -25,7 +25,6 @@ use injector::{CompositeInjector, InjectStrategy, TextInjector};
 use asr::{AsrConfig, TranscriptResult};
 use ui::strings::{Strings, UiLang};
 use ui::tray::{TrayAction, TrayManager};
-use ui::config_window;
 use ui::gui::app::spawn_gui;
 use ui::gui::state::{GuiAction, GuiSnapshot, TranscriptEntry};
 
@@ -322,12 +321,6 @@ fn main() -> Result<()> {
         }
     }
 
-    // Initialize shared config for settings window persistence
-    config_window::init_shared_config(app_config.clone());
-
-    // Show settings GUI on first launch
-    config_window::show_config_window(tray_manager.hwnd(), &app_config);
-
     // Store tray sender for Settings window
     let _tray_tx_for_settings = tray_tx.clone();
 
@@ -339,6 +332,7 @@ fn main() -> Result<()> {
         latest_final_text: String::new(),
         latest_partial_text: String::new(),
         history: Vec::new(),
+        show_settings_requested: false,
     }));
 
     let (gui_snapshot_tx, gui_snapshot_rx) = crossbeam::channel::bounded::<GuiSnapshot>(256);
@@ -358,6 +352,7 @@ fn main() -> Result<()> {
         show_overlay.clone(),
         initial_pos,
         initial_size,
+        Some(app_config.ui.theme.clone()),
     );
 
     // ── Audio capture processing thread ──────────────────────────────
@@ -640,11 +635,11 @@ fn main() -> Result<()> {
                             );
                         }
                         TrayAction::OpenSettings => {
-                            info!("Tray: Open Settings requested");
-                            config_window::show_config_window(
-                                tray_manager.hwnd(),
-                                &app_config,
-                            );
+                            info!("Tray: Open Settings requested (egui panel)");
+                            if let Ok(mut snap) = gui_snapshot.lock() {
+                                snap.show_settings_requested = true;
+                            }
+                            let _ = gui_snapshot_tx.send(gui_snapshot.lock().unwrap().clone());
                         }
                         TrayAction::ShowMainWindow => {
                             info!("Tray: Show Main Window requested");

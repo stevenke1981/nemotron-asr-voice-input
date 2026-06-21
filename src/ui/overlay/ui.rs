@@ -9,9 +9,8 @@ use egui::*;
 ///
 /// * `ui` — egui UI handle (typically from a `CentralPanel`)
 /// * `text` — the transcript text to display
-/// * `hovered` — whether the mouse is over the overlay window
-pub fn render_overlay_frame(ui: &mut Ui, text: &str, hovered: bool) {
-    let alpha = if hovered { 0.95 } else { 0.85 };
+/// * `alpha` — background opacity (0.0 .. 1.0)
+pub fn render_overlay_frame(ui: &mut Ui, text: &str, alpha: f32) {
     let frame = Frame::NONE
         .fill(Color32::from_black_alpha((alpha * 255.0) as u8))
         .corner_radius(12.0);

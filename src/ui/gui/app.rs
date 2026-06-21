@@ -26,6 +26,7 @@ pub struct GuiApp {
     settings_restore_clipboard: bool,
     settings_conversion_mode: String,
     settings_ui_lang: String,
+    settings_theme: String,
     // Window geometry tracking
     window_x: f32,
     window_y: f32,
@@ -34,9 +35,10 @@ pub struct GuiApp {
 }
 
 impl GuiApp {
-    pub fn new(state: GuiSharedState, initial_pos: Option<egui::Pos2>, initial_size: Option<egui::Vec2>) -> Self {
+    pub fn new(state: GuiSharedState, initial_pos: Option<egui::Pos2>, initial_size: Option<egui::Vec2>, initial_theme: Option<String>) -> Self {
         let (wx, wy) = initial_pos.map(|p| (p.x, p.y)).unwrap_or((100.0, 100.0));
         let (ww, wh) = initial_size.map(|s| (s.x, s.y)).unwrap_or((800.0, 600.0));
+        let theme = initial_theme.unwrap_or_else(|| "Dark".into());
         Self {
             state,
             current_snapshot: GuiSnapshot::default(),
@@ -52,6 +54,7 @@ impl GuiApp {
             settings_restore_clipboard: true,
             settings_conversion_mode: "s2t".into(),
             settings_ui_lang: "English".into(),
+            settings_theme: theme,
             window_x: wx,
             window_y: wy,
             window_w: ww,
@@ -61,6 +64,9 @@ impl GuiApp {
 
     fn process_incoming(&mut self) {
         while let Ok(snapshot) = self.state.gui_rx.try_recv() {
+            if snapshot.show_settings_requested {
+                self.show_settings = true;
+            }
             self.current_snapshot = snapshot;
         }
     }
@@ -73,6 +79,13 @@ impl GuiApp {
 impl eframe::App for GuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_incoming();
+
+        // Apply theme
+        if self.settings_theme == "Light" {
+            ctx.set_visuals(egui::Visuals::light());
+        } else {
+            ctx.set_visuals(egui::Visuals::dark());
+        }
 
         // Track window geometry from egui input state
         let screen = ctx.input(|i| i.screen_rect);
@@ -262,6 +275,15 @@ impl eframe::App for GuiApp {
                                     }
                                 });
                             ui.end_row();
+
+                            ui.label("Theme:");
+                            egui::ComboBox::from_id_salt("theme")
+                                .selected_text(&self.settings_theme)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.settings_theme, "Dark".to_owned(), "Dark");
+                                    ui.selectable_value(&mut self.settings_theme, "Light".to_owned(), "Light");
+                                });
+                            ui.end_row();
                         });
 
                     ui.add_space(10.0);
@@ -285,6 +307,7 @@ impl eframe::App for GuiApp {
                             cfg.injector.restore_clipboard = self.settings_restore_clipboard;
                             cfg.conversion.mode = self.settings_conversion_mode.clone();
                             cfg.ui.language = if self.settings_ui_lang == "Chinese" { "zh".into() } else { "en".into() };
+                            cfg.ui.theme = self.settings_theme.clone();
                             cfg.ui.window_x = Some(self.window_x);
                             cfg.ui.window_y = Some(self.window_y);
                             cfg.ui.window_width = Some(self.window_w);
@@ -323,6 +346,7 @@ pub fn spawn_gui(
     show_overlay: Arc<AtomicBool>,
     initial_pos: Option<egui::Pos2>,
     initial_size: Option<egui::Vec2>,
+    initial_theme: Option<String>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("egui-gui".into())
@@ -351,7 +375,7 @@ pub fn spawn_gui(
             if let Err(e) = eframe::run_native(
                 "Nemotron Voice Input",
                 options,
-                Box::new(|_cc| Ok(Box::new(GuiApp::new(shared_state, initial_pos, initial_size)))),
+                Box::new(|_cc| Ok(Box::new(GuiApp::new(shared_state, initial_pos, initial_size, initial_theme)))),
             ) {
                 tracing::error!("eframe GUI exited with error: {}", e);
             }
