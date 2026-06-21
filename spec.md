@@ -62,9 +62,10 @@ nemotron-voice-input/
 │   │   └── clipboard.rs           # 剪貼簿後備方案
 │   ├── ui/
 │   │   ├── mod.rs                 # 使用者介面
-│   │   ├── tray.rs                # 系統匣圖示
+│   │   ├── tray.rs                # 系統匣圖示 (雙語選單、通知)
+│   │   ├── strings.rs             # 中英文雙語字串模組 (60+ 字串)
 │   │   ├── overlay.rs             # 轉錄浮窗 (可選)
-│   │   └── config_window.rs       # 設定視窗
+│   │   └── config_window.rs       # 設定視窗 (Win32 modeless dialog)
 │   ├── config/
 │   │   ├── mod.rs                 # 設定管理
 │   │   └── settings.rs            # 設定結構與序列化
@@ -188,14 +189,55 @@ pub enum InjectStrategy {
 
 ### 4.3 系統匣圖示
 
-- 右鍵選單：
-  - 啟用/停用轉錄 (Toggle)
+- 右鍵選單 (雙語：支援中/英文即時切換)：
+  - 啟用/停用轉錄 (Toggle Recording)
   - 語言選擇 (子選單：40 種語言)
-  - 模式切換 (連續 / 按鍵觸發)
-  - 設定...
+  - 切換語言 (Cycle Language)
+  - 強制結束語句 (Flush)
+  - 設定 (Settings) → 開啟設定視窗
   - 離開
+- 狀態指示圖示：程式化繪製 16×16 彩色圓形（綠 = 錄音中，灰 = 閒置）
+- 氣球通知：`send_tray_notification()` 公開輔助函式，字串自動依 `UiLang` 本地化
 
-### 4.4 快捷鍵
+### 4.4 設定視窗
+
+- **實作方式**：Win32 modeless dialog (`CreateWindowExW` + 自訂 WNDPROC)
+- **無資源檔依賴**：所有控制項在程式碼中以 `CreateWindowExW` 建立
+- **按鈕**：Save (儲存) / Cancel (取消)
+- **設定欄位**：
+
+| 欄位 | 控制項類型 | 說明 |
+|------|-----------|------|
+| UI Language | Combo box (英/中) | 切換整個介面語言，即時重繪 |
+| ASR Language | Combo box (22 種語言代碼) | 指定 ASR 轉錄語言 |
+| Provider | Combo box (cpu/cuda) | 推論執行提供者 |
+| Decoding method | Combo box (greedy_search / modified_beam_search) | 解碼方法 |
+| Num Threads | Edit box (數字) | 推論執行緒數 |
+| VAD | Checkbox | 啟用/停用語音活動偵測 |
+| Injection strategy | Combo box (sendinput / clipboard / auto) | 文字注入策略 |
+| Key delay (ms) | Edit box (數字) | 按鍵模擬延遲 |
+| Restore clipboard | Checkbox | 注入後還原剪貼簿內容 |
+| Hotkeys | Static text (顯示按鍵綁定) | Ctrl+Alt+R / L / Space |
+| Model status | Static text | 模型檔案存在狀態 |
+
+- **儲存行為**：寫入 `config.toml`，部分設定需重啟應用程式生效
+- **單例保護**：`CONFIG_HWND` `AtomicIsize` 防止重複開啟
+- **背景顏色**：`GetSysColorBrush(COLOR_WINDOW)` 跟隨系統主題
+- **控制項列舉**：`FindWindowExW` + `GetDlgCtrlID` 取得子控制項 HWND
+
+### 4.5 雙語字串系統
+
+- **UiLang 列舉**：`English` / `Chinese`
+- **Strings 結構**：60+ 方法，每個方法以 `match self.lang` 回傳對應語言字串
+- **涵蓋範圍**：
+  - 系統匣選單項目
+  - 通知提示文字
+  - 設定視窗標籤與按鈕
+  - 快捷鍵名稱
+  - 語言顯示名稱 (language_display_name 函式)
+- **設計原則**：無 i18n 框架，純 Rust match pattern，兩語言時最輕量方案
+
+### 4.6 快捷鍵
 
 | 快捷鍵 | 功能 |
 |--------|------|

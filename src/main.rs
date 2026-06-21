@@ -21,7 +21,9 @@ use hotkey::register::HotkeyAction;
 use hotkey::HotkeyManager;
 use injector::{CompositeInjector, InjectStrategy, TextInjector};
 use asr::{AsrConfig, TranscriptResult};
+use ui::strings::{Strings, UiLang};
 use ui::tray::{TrayAction, TrayManager};
+use ui::config_window;
 
 /// Nemotron ASR Voice Input - Real-time speech recognition and text injection.
 #[derive(Parser, Debug)]
@@ -227,6 +229,12 @@ fn main() -> Result<()> {
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);
     let (tray_tx, tray_rx) = crossbeam::channel::unbounded::<TrayAction>();
 
+    // ── UI strings ───────────────────────────────────────────────────
+    let ui_lang = UiLang::from_code(&app_config.ui.language);
+    let ui_strings = Strings::new(ui_lang);
+    ui::tray::set_ui_lang(&app_config.ui.language);
+    info!("UI language: {:?}", ui_lang);
+
     // ── Tray initialization ──────────────────────────────────────────
     let mut tray_manager = TrayManager::new();
     if !cli.no_tray {
@@ -234,11 +242,14 @@ fn main() -> Result<()> {
             warn!("Failed to initialize system tray: {} (continuing without tray)", e);
         } else {
             tray_manager.show_notification(
-                "Nemotron Voice Input",
-                "Ready. Press Ctrl+Alt+R to toggle recording.",
+                ui_strings.app_name(),
+                ui_strings.notification_ready(),
             );
         }
     }
+
+    // Store tray sender for Settings window
+    let _tray_tx_for_settings = tray_tx.clone();
 
     // ── Audio capture processing thread ──────────────────────────────
     let audio_state = state.clone();
@@ -404,7 +415,17 @@ fn main() -> Result<()> {
                         TrayAction::Flush => {
                             info!("Tray: Flush");
                             audio_capture.clear_ringbuf();
-                            tray_manager.show_notification("Flush", "Buffer cleared");
+                            tray_manager.show_notification(
+                                ui_strings.app_name(),
+                                ui_strings.notification_flushed(),
+                            );
+                        }
+                        TrayAction::OpenSettings => {
+                            info!("Tray: Open Settings requested");
+                            config_window::show_config_window(
+                                tray_manager.hwnd(),
+                                &app_config,
+                            );
                         }
                         TrayAction::Exit => {
                             info!("Tray: Exit requested");
@@ -512,7 +533,9 @@ fn cycle_language(
 
     *current_language.lock().unwrap() = next_lang.clone();
     info!("Language cycled: {} -> {}", current, next_lang);
-    tray.show_notification("Language", &format!("Switched to {}", next_lang));
+
+    let msg = ui::tray::tray_strings().notification_language_switched_to(next_lang);
+    tray.show_notification("Language", &msg);
 }
 
 /// Set thread priority via Windows API.

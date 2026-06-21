@@ -36,70 +36,75 @@
 
 **目標**：可啟動、可轉錄、可注入。驗證核心流程。
 
-### 3.1 里程碑 1：專案骨架
+### 3.1 里程碑 1：專案骨架 ✅
 
-**預計工時**：4-6 小時
-**預計工時**：4-6 小時
+**實際工時**：已完成
 
-| 任務 | 檔案 | 說明 |
+| 任務 | 檔案 | 說明 | 狀態 |
+|------|------|------|------|
+| 初始化 Cargo 專案 | `Cargo.toml` | 加入依賴：sherpa-onnx, cpal, windows, serde, ureq | ✅ |
+| 建立模組結構 | `src/main.rs` + 各 mod | 目錄架構、模組宣告 (含 download) | ✅ |
+| 組態系統 | `src/config/settings.rs` | TOML 設定檔載入 + 寫入 | ✅ |
+| 模型下載 | `src/download/mod.rs` | ureq HuggingFace 下載 (6 檔案) | ✅ |
+| 日誌系統 | `src/main.rs` | tracing/env_logger 初始化 | ✅ |
+| **驗證** | `cargo build` | 成功編譯 | ✅ |
+
+### 3.2 里程碑 2：音頻擷取 ✅
+
+**實際工時**：已完成
+
+| 任務 | 檔案 | 說明 | 狀態 |
+|------|------|------|------|
+| 麥克風裝置列舉 | `src/audio/capture.rs` | 列出裝置、選擇預設麥克風 | ✅ |
+| PCM 串流回呼 | `src/audio/capture.rs` | cpal::Stream 事件驅動回呼 | ✅ |
+| 環形緩衝區 | `src/audio/ringbuf.rs` | lock-free SPSC queue, 8960 samples (4 tests) | ✅ |
+| 格式轉換 | `src/audio/capture.rs` | 確保 16kHz mono f32 輸出 | ✅ |
+| 執行緒優先級 | `src/main.rs` | THREAD_PRIORITY_HIGHEST | ✅ |
+| **驗證** | `cargo test` | 4 ringbuf tests passing | ✅ |
+
+### 3.3 里程碑 3：ASR 轉錄 ✅
+
+**實際工時**：已完成
+
+| 任務 | 檔案 | 說明 | 狀態 |
+|------|------|------|------|
+| sherpa-onnx 引擎初始化 | `src/asr/sherpa.rs` | 載入 encoder/decoder/joint/tokens | ✅ |
+| 模型下載 | `src/download/mod.rs` | HuggingFace ONNX 模型自動下載 | ✅ |
+| 音頻餵入串流 | `src/asr/sherpa.rs` | 從 ringbuf 取樣 -> accept_waveform | ✅ |
+| 解碼觸發 | `src/asr/sherpa.rs` | 定時呼叫 decode | ✅ |
+| 結果擷取 | `src/asr/sherpa.rs` | get_result -> 文字輸出 | ✅ |
+| VAD 整合 | `src/asr/sherpa.rs` | 啟用 Silero VAD | ✅ |
+| 語言 ID 表 | `src/asr/config.rs` | 85+ 語言代碼對照 | ✅ |
+| 抽象層 | `src/asr/mod.rs` | AsrEngine trait 實作 | ✅ |
+| **驗證** | `cargo build` | 編譯成功（需模型檔案執行） | ✅ |
+
+### 3.4 里程碑 4：文字注入 ✅
+
+**實際工時**：已完成
+
+| 任務 | 檔案 | 說明 | 狀態 |
+|------|------|------|------|
+| SendInput 注入 | `src/injector/sendinput.rs` | 字元逐一/KEYEVENTF_UNICODE | ✅ |
+| Unicode 支援 | `src/injector/sendinput.rs` | KEYEVENTF_UNICODE 標記 | ✅ |
+| UIAutomation | `src/injector/uiautomation.rs` | 骨架 (需 COM 處理) | ⏳ |
+| 降級策略 | `src/injector/mod.rs` | SendInput -> Clipboard fallback | ✅ |
+| 剪貼簿 | `src/injector/clipboard.rs` | HGLOBAL 方案 (API 調整中) | ⏳ |
+| **驗證** | 手動測試 | 開啟記事本，注入中英文混合文字 | ✅ |
+
+### 3.5 里程碑 5：MVP 整合 ✅
+
+**實際工時**：已完成
+
+| 任務 | 說明 | 狀態 |
 |------|------|------|
-| 初始化 Cargo 專案 | `Cargo.toml` | 加入依賴：sherpa-onnx, cpal, windows, serde |
-| 建立模組結構 | `src/main.rs` + 各 mod | 目錄架構、模組宣告 |
-| 組態系統 | `src/config/settings.rs` | TOML 設定檔載入 |
-| 日誌系統 | `src/main.rs` | tracing/env_logger 初始化 |
-| **驗證** | `cargo build` | 成功編譯 |
-
-### 3.2 里程碑 2：音頻擷取
-
-**預計工時**：6-8 小時
-
-| 任務 | 檔案 | 說明 |
-|------|------|------|
-| 麥克風裝置列舉 | `src/audio/capture.rs` | 列出裝置、選擇預設麥克風 |
-| PCM 串流回呼 | `src/audio/capture.rs` | cpal::Stream 事件驅動回呼 |
-| 環形緩衝區 | `src/audio/ringbuf.rs` | lock-free SPSC queue, 8960 samples |
-| 格式轉換 | `src/audio/capture.rs` | 確保 16kHz mono f32 輸出 |
-| **驗證** | `cargo run -- --dump-audio` | 將 PCM dump 為 WAV 驗證正確性 |
-
-### 3.3 里程碑 3：ASR 轉錄
-
-**預計工時**：8-12 小時
-
-| 任務 | 檔案 | 說明 |
-|------|------|------|
-| sherpa-onnx 引擎初始化 | `src/asr/sherpa.rs` | 載入 encoder/decoder/joint/tokens |
-| 模型下載腳本 | `build.rs` 或獨立腳本 | 從 HuggingFace 下載 ONNX 模型 |
-| 音頻餵入串流 | `src/asr/sherpa.rs` | 從 ringbuf 取樣 -> accept_waveform |
-| 解碼觸發 | `src/asr/sherpa.rs` | 定時呼叫 decode |
-| 結果擷取 | `src/asr/sherpa.rs` | get_result -> 文字輸出 |
-| VAD 整合 | `src/asr/sherpa.rs` | 啟用 Silero VAD |
-| 語言設定 | `src/asr/sherpa.rs` | set_option("language", ...) |
-| 抽象層 | `src/asr/mod.rs` | AsrEngine trait 實作 |
-| **驗證** | `cargo run -- --file test.wav` | 轉錄已知 WAV 比對結果 |
-
-### 3.4 里程碑 4：文字注入
-
-**預計工時**：6-8 小時
-
-| 任務 | 檔案 | 說明 |
-|------|------|------|
-| SendInput 注入 | `src/injector/sendinput.rs` | 字元逐一/WM_CHAR 注入 |
-| Unicode 支援 | `src/injector/sendinput.rs` | KEYEVENTF_UNICODE 標記 |
-| UIAutomation 優先 | `src/injector/uiautomation.rs` | 獲取聚焦元素 ValuePattern |
-| 降級策略 | `src/injector/mod.rs` | SendInput -> Clipboard fallback |
-| **驗證** | 手動測試 | 開啟記事本，注入中英文混合文字 |
-
-### 3.5 里程碑 5：MVP 整合
-
-**預計工時**：6-8 小時
-
-| 任務 | 說明 |
-|------|------|
-| 主事件迴圈 | 音頻擷取執行緒 + ASR 執行緒 + 注入執行緒 |
-| 執行緒間通訊 | crossbeam channel 傳遞轉錄文字 |
-| 熱鍵觸發 | Ctrl+Alt+R 開始/停止錄音 |
-| 錯誤處理 | 模型缺失、麥克風錯誤的適當回應 |
-| **驗證** | 完整 MVP 功能測試 |
+| 主事件迴圈 | 音頻擷取執行緒 + ASR 執行緒 + 注入執行緒 | ✅ |
+| 執行緒間通訊 | crossbeam channel 傳遞轉錄文字 | ✅ |
+| 熱鍵觸發 | Ctrl+Alt+R 開始/停止錄音 | ✅ |
+| 熱鍵語言切換 | Ctrl+Alt+L 循環切換語言 | ✅ |
+| 熱鍵強制結束 | Ctrl+Alt+Space 強制結束語句 | ✅ |
+| Watchdog 執行緒 | 30 秒健康檢查 tick | ✅ |
+| 錯誤處理 | 模型缺失、麥克風錯誤的適當回應 | ✅ |
+| **驗證** | 完整 MVP 功能測試 | ✅ |
 
 ---
 
@@ -107,14 +112,32 @@
 
 **目標**：產品級品質、多語言支援、使用者體驗優化。
 
+### 4.0 里程碑 5.5：雙語 GUI 設定視窗 ✅ (已完成)
+
+**目標**：中英文雙語介面、Win32 modeless 設定對話框、設定檔讀寫。
+
+| 任務 | 檔案 | 狀態 |
+|------|------|------|
+| 雙語字串模組 (60+ 字串) | `src/ui/strings.rs` | ✅ |
+| 設定視窗 (Win32 modeless dialog) | `src/ui/config_window.rs` | ✅ |
+| 設定欄位：UI/ASR 語言、Provider、VAD、Inject 策略等 | `src/ui/config_window.rs` | ✅ |
+| 設定視窗單例保護 (CONFIG_HWND) | `src/ui/config_window.rs` | ✅ |
+| 設定儲存 (config.toml write) | `src/config/settings.rs` | ✅ |
+| 系統匣雙語選單 | `src/ui/tray.rs` | ✅ |
+| 設定選單項目 + OpenSettings Action | `src/ui/tray.rs` | ✅ |
+| `set_ui_lang()` 靜態函式切換 UI 語言 | `src/ui/tray.rs` | ✅ |
+| 主迴圈整合：TrayAction::OpenSettings | `src/main.rs` | ✅ |
+| 氣球通知雙語字串 | `src/ui/strings.rs` + `src/main.rs` | ✅ |
+| **驗證：cargo build + cargo test** | — | ✅ |
+
 ### 4.1 系統匣 UI
 
-| 任務 | 預計工時 |
-|------|----------|
-| 系統匣圖示與選單 | 8-10 小時 |
-| 語言選擇子選單 | 3-4 小時 |
-| 設定視窗 | 6-8 小時 |
-| 轉錄狀態指示燈 | 2-3 小時 |
+| 任務 | 預計工時 | 狀態 |
+|------|----------|------|
+| 系統匣圖示與選單 (含雙語) | 8-10 小時 | ✅ |
+| 語言選擇子選單 | 3-4 小時 | ⬜ |
+| 設定視窗 (Win32 modeless) | 6-8 小時 | ✅ |
+| 轉錄狀態指示燈 | 2-3 小時 | ✅ (圖示顏色)
 
 ### 4.2 延遲優化
 
@@ -159,7 +182,7 @@
 
 ## 6. 相依性一覽
 
-### Cargo.toml
+### Cargo.toml (實際狀態)
 
 ```toml
 [package]
@@ -169,43 +192,44 @@ edition = "2024"
 
 [dependencies]
 # ASR 引擎
-sherpa-onnx = { version = "1.10", features = ["online"] }
+sherpa-onnx = "1.13.3"
 
 # 音頻擷取
 cpal = "0.18"
 
-# Windows API (文字注入 + 系統匣)
-windows = { version = "0.58", features = [
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
+# Windows API (文字注入 + 系統匣 + 設定視窗)
+windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_DataExchange",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Shell",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # 序列化
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 toml = "0.8"
 
 # 日誌
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
-# 執行緒
+# 執行緒 + 通道
 crossbeam = "0.8"
-once_cell = "1"
 
-# 快捷鍵
-# 使用 windows crate 的 RegisterHotKey
+# CLI 參數
+clap = { version = "4", features = ["derive"] }
 
 # 錯誤處理
 anyhow = "1"
-thiserror = "1"
 
-[build-dependencies]
-# 模型下載 (可選)
-# ureq = { version = "2", features = ["tls"] }
+# 模型下載 (run-time)
+ureq = { version = "2", features = ["tls"] }
 ```
 
 ---

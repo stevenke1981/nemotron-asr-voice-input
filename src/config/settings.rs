@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub hotkey: HotkeyConfig,
     /// Language settings
     pub language: LanguageConfig,
+    /// UI settings
+    pub ui: UiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +88,13 @@ pub struct LanguageConfig {
     pub cycle_order: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// UI language: "en" (English) or "zh" (Traditional Chinese)
+    pub language: String,
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -95,6 +104,15 @@ impl Default for AppConfig {
             injector: InjectorConfig::default(),
             hotkey: HotkeyConfig::default(),
             language: LanguageConfig::default(),
+            ui: UiConfig::default(),
+        }
+    }
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            language: "en".into(),
         }
     }
 }
@@ -192,5 +210,12 @@ impl AppConfig {
     /// Get the chunk size in samples.
     pub fn chunk_samples(&self) -> usize {
         (self.audio.sample_rate as u64 * self.audio.chunk_size_ms as u64 / 1000) as usize
+    }
+
+    /// Save configuration to a TOML file.
+    pub fn save(&self, path: impl AsRef<std::path::Path>) -> anyhow::Result<()> {
+        let toml_str = toml::to_string_pretty(self)?;
+        std::fs::write(path.as_ref(), toml_str)?;
+        Ok(())
     }
 }

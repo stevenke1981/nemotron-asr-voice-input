@@ -9,14 +9,14 @@
 
 ## 階段一：MVP 最小可行產品
 
-### Milestone 1: 專案骨架
+### Milestone 1: 專案骨架 ✅
 
-- [ ] P0 `cargo init` 建立專案，設定 `Cargo.toml` 所有依賴
-- [ ] P0 建立模組目錄結構 (`src/audio/`, `src/asr/`, `src/injector/`, `src/config/`, `src/ui/`, `src/hotkey/`)
-- [ ] P0 實作 `src/config/settings.rs` — TOML 設定檔載取
-- [ ] P0 實作 `build.rs` — 檢查模型檔案是否存在，下載提示
-- [ ] P0 設定 tracing/logging
-- [ ] P0 驗證：`cargo build` 成功
+- [x] P0 `cargo init` 建立專案，設定 `Cargo.toml` 所有依賴
+- [x] P0 建立模組目錄結構 (`src/audio/`, `src/asr/`, `src/injector/`, `src/config/`, `src/ui/`, `src/hotkey/`, `src/download/`)
+- [x] P0 實作 `src/config/settings.rs` — TOML 設定檔載取 + 寫入
+- [x] P0 實作模型下載 `src/download/mod.rs` — ureq HuggingFace 下載
+- [x] P0 設定 tracing/logging
+- [x] P0 驗證：`cargo build` 成功
 
 ### Milestone 2: 音頻擷取
 
@@ -29,7 +29,7 @@
 
 ### Milestone 3: ASR 轉錄
 
-- [ ] P0 實作模型下載/路徑組態，準備 `models/` 目錄
+- [x] P0 實作模型下載/路徑組態 (`src/download/mod.rs`)，準備 `models/` 目錄
 - [ ] P0 實作 `src/asr/sherpa.rs` — sherpa-onnx OnlineRecognizer 初始化
 - [ ] P0 實作音頻餵入：ringbuf → `stream.accept_waveform()`
 - [ ] P0 實作解碼循環：定時 `recognizer.decode()`
@@ -66,10 +66,14 @@
 
 ### 系統匣與 UI
 
-- [ ] P1 實作 `src/ui/tray.rs` — Windows 系統匣圖示
-- [ ] P1 右鍵選單：啟用/停用、語言選擇、設定、離開
-- [ ] P1 轉錄狀態提示 (系統匣 balloon notification)
-- [ ] P2 設定視窗 (可選，初期用 CLI/config file)
+- [x] P1 實作 `src/ui/tray.rs` — Windows 系統匣圖示 (內建雙語選單)
+- [x] P1 右鍵選單：啟用/停用、語言切換、強制結束、設定、離開
+- [x] P1 轉錄狀態提示 (系統匣 balloon notification，雙語字串)
+- [x] P2 設定視窗 (Win32 modeless dialog，雙語介面) ✅
+- [x] P1 中英文雙語字串模組 `src/ui/strings.rs` (60+ 字串) ✅
+- [x] P1 設定寫入 `config.toml` (`AppConfig::save()`) ✅
+- [x] P1 `set_ui_lang()` 系統匣語言靜態切換 ✅
+- [x] P1 程式化圖示 (16×16 GDI 彩色圓形) ✅
 - [ ] P2 轉錄浮窗 overlay (可選)
 
 ### 延遲與效能優化
@@ -82,14 +86,15 @@
 
 ### 多語言支援
 
-- [ ] P1 完整 40 種語言 ID 對照表 (languages.toml)
-- [ ] P1 語言快捷切換 (Ctrl+Alt+L 循環切換)
+- [x] P1 完整 85+ 種語言 ID 對照表 (`src/asr/config.rs`)
+- [x] P1 語言快捷切換 (Ctrl+Alt+L 循環切換)
 - [ ] P2 自動語言偵測支援 (不設定 language，讓模型自動判斷)
 - [ ] P2 每視窗/每應用程式語言記憶
 
 ### 穩定性
 
-- [ ] P1 watchdog 線程：監控 ASR 引擎健康狀態
+- [x] P1 watchdog 線程：30 秒健康檢查記號 (logging tick)
+- [x] P1 音頻執行緒即時優先級 (THREAD_PRIORITY_HIGHEST)
 - [ ] P1 記憶體使用監控與日誌
 - [ ] P1 模型熱重載 (更新模型不需重啟)
 - [ ] P2 長時間運作測試 (24h+)
@@ -137,3 +142,7 @@
 | TBD | 使用 cpal 而非直接 WASAPI COM | 純 Rust、跨平台潛力 |
 | TBD | ONNX INT4 而非 FP32 | INT4 約 1/4 大小、速度更快 |
 | TBD | 預設 CPU provider | 確保最大相容性，CUDA 為選項 |
+| 2026-06-21 | 設定視窗使用 Win32 modeless dialog (CreateWindowExW) 而非 DialogBox | 不需 .rc 資源檔，純 Rust 可編譯 |
+| 2026-06-21 | 雙語系統使用簡單 match self.lang 模式而非 i18n crate | 兩語言時最輕量、零依賴 |
+| 2026-06-21 | `CONFIG_HWND` 使用 `AtomicIsize` 儲存 HWND | 避免 `OnceLock<HWND>` 的 Send/Sync 問題 |
+| 2026-06-21 | 控制項列舉使用 `FindWindowExW` + `GetDlgCtrlID` | windows 0.62 中 GetDlgItem 傳回型別問題 |

@@ -1,6 +1,6 @@
 /// System tray icon and context menu implementation using Win32 API.
 /// Uses Shell_NotifyIconW, NOTIFYICONDATAW, and context menu.
-use crossbeam::channel;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 use tracing::{info, warn};
 use windows::core::{w, PCWSTR};
@@ -8,6 +8,8 @@ use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+use super::strings::{Strings, UiLang};
 
 /// WM_APP + 1 — custom message sent by Shell_NotifyIcon to our hidden window.
 const WM_TRAYICON: u32 = WM_APP + 1;
@@ -20,8 +22,9 @@ const IDM_TOGGLE_RECORDING: u32 = 1001;
 const IDM_CYCLE_LANGUAGE: u32 = 1002;
 const IDM_FLUSH: u32 = 1004;
 const IDM_EXIT: u32 = 1003;
+const IDM_SETTINGS: u32 = 1005;
 
-// ── Tray action channel (global, set once from main) ─────────────────
+// ── Tray action channel ──────────────────────────────────────────────
 
 /// Actions that the tray sends to the main loop.
 #[derive(Debug, Clone)]
@@ -29,22 +32,84 @@ pub enum TrayAction {
     ToggleRecording,
     CycleLanguage,
     Flush,
+    OpenSettings,
     Exit,
 }
 
-static TRAY_TX: OnceLock<channel::Sender<TrayAction>> = OnceLock::new();
+static TRAY_TX: OnceLock<crossbeam::channel::Sender<TrayAction>> = OnceLock::new();
+
+/// UI language for tray context menu (set from config).
+static UI_LANG: AtomicU8 = AtomicU8::new(0);
+
+/// Set the UI language for the tray context menu.
+pub fn set_ui_lang(code: &str) {
+    match code {
+        "zh" => UI_LANG.store(1, Ordering::Relaxed),
+        _ => UI_LANG.store(0, Ordering::Relaxed),
+    }
+}
+
+/// Get the current UI strings for the tray.
+pub fn tray_strings() -> Strings {
+    let lang = match UI_LANG.load(Ordering::Relaxed) {
+        1 => UiLang::Chinese,
+        _ => UiLang::English,
+    };
+    Strings::new(lang)
+}
 
 /// Get a clone of the tray sender channel (for use in the window proc).
-pub fn tray_sender() -> Option<channel::Sender<TrayAction>> {
+pub fn tray_sender() -> Option<crossbeam::channel::Sender<TrayAction>> {
     TRAY_TX.get().cloned()
 }
 
 /// Set the tray sender channel (called once from main).
-pub fn set_tray_sender(tx: channel::Sender<TrayAction>) -> Result<(), String> {
+pub fn set_tray_sender(tx: crossbeam::channel::Sender<TrayAction>) -> Result<(), String> {
     TRAY_TX
         .set(tx)
         .map_err(|_| "TRAY_TX already set".to_string())
 }
+
+/// Send a balloon notification from anywhere (used by config window).
+pub fn send_tray_notification(title: &str, message: &str) {
+    let hwnd = HIDDEN_HWND.load(Ordering::Relaxed);
+    if hwnd == 0 {
+        return;
+    }
+    let hwnd = HWND(hwnd as *mut _);
+
+    unsafe {
+        let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+        nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+        nid.hWnd = hwnd;
+        nid.uID = TRAY_ICON_ID;
+        nid.uFlags = NIF_INFO;
+
+        let msg_wide = message.encode_utf16().chain(std::iter::once(0));
+        for (i, c) in msg_wide.enumerate() {
+            if i >= 256 {
+                break;
+            }
+            nid.szInfo[i] = c;
+        }
+
+        let title_wide = title.encode_utf16().chain(std::iter::once(0));
+        for (i, c) in title_wide.enumerate() {
+            if i >= 64 {
+                break;
+            }
+            nid.szInfoTitle[i] = c;
+        }
+
+        nid.dwInfoFlags = NIIF_INFO;
+        nid.Anonymous.uTimeout = 5000;
+
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+    }
+}
+
+/// Store the hidden window HWND for notification access.
+static HIDDEN_HWND: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
 // ── Window procedure for the hidden tray window ──────────────────────
 
@@ -90,6 +155,11 @@ unsafe extern "system" fn tray_wndproc(
                         let _ = tx.send(TrayAction::Flush);
                     }
                 }
+                IDM_SETTINGS => {
+                    if let Some(tx) = tray_sender() {
+                        let _ = tx.send(TrayAction::OpenSettings);
+                    }
+                }
                 IDM_EXIT => {
                     if let Some(tx) = tray_sender() {
                         let _ = tx.send(TrayAction::Exit);
@@ -107,19 +177,22 @@ unsafe extern "system" fn tray_wndproc(
     }
 }
 
-/// Show the context menu at the current cursor position.
+/// Show the context menu at the current cursor position, using bilingual strings.
 unsafe fn show_context_menu(hwnd: HWND) {
+    let s = tray_strings();
     let menu = match unsafe { CreatePopupMenu() } {
         Ok(m) => m,
         Err(_) => return,
     };
 
     unsafe {
-        AppendMenuW(menu, MF_STRING, IDM_TOGGLE_RECORDING as usize, w!("Toggle Recording")).ok();
-        AppendMenuW(menu, MF_STRING, IDM_CYCLE_LANGUAGE as usize, w!("Cycle Language")).ok();
-        AppendMenuW(menu, MF_STRING, IDM_FLUSH as usize, w!("Flush")).ok();
-        AppendMenuW(menu, MF_SEPARATOR, 0, w!("")).ok();
-        AppendMenuW(menu, MF_STRING, IDM_EXIT as usize, w!("Exit")).ok();
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_TOGGLE_RECORDING, s.tray_toggle_recording());
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_CYCLE_LANGUAGE, s.tray_cycle_language());
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_FLUSH, s.tray_flush());
+        AppendMenuW(menu, MENU_ITEM_FLAGS(0x800), 0, w!("")).ok();
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_SETTINGS, s.tray_settings());
+        AppendMenuW(menu, MENU_ITEM_FLAGS(0x800), 0, w!("")).ok();
+        append_menu_item(menu, MENU_ITEM_FLAGS(0), IDM_EXIT, s.tray_exit());
     }
 
     let mut pt = POINT::default();
@@ -138,6 +211,14 @@ unsafe fn show_context_menu(hwnd: HWND) {
         );
 
         let _ = DestroyMenu(menu);
+    }
+}
+
+/// Append a menu item with Unicode text.
+unsafe fn append_menu_item(menu: HMENU, flags: MENU_ITEM_FLAGS, id: u32, text: &str) {
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(wide.as_ptr()));
     }
 }
 
@@ -198,7 +279,7 @@ impl TrayManager {
     }
 
     /// Initialize: create hidden window, register icon, set up the tray sender.
-    pub fn initialize(&mut self, action_tx: channel::Sender<TrayAction>) -> Result<(), String> {
+    pub fn initialize(&mut self, action_tx: crossbeam::channel::Sender<TrayAction>) -> Result<(), String> {
         set_tray_sender(action_tx).ok();
         self.create_hidden_window()?;
         self.add_tray_icon()?;
@@ -245,6 +326,7 @@ impl TrayManager {
             .map_err(|e| format!("CreateWindowExW failed: {}", e))?;
 
             self.hwnd = hwnd;
+            HIDDEN_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::Relaxed);
             info!("Hidden tray window created (HWND={:?})", hwnd);
             Ok(())
         }
@@ -293,7 +375,6 @@ impl TrayManager {
             nid.uID = TRAY_ICON_ID;
             nid.uFlags = NIF_INFO;
 
-            // Copy message into szInfo
             let msg_wide = message.encode_utf16().chain(std::iter::once(0));
             for (i, c) in msg_wide.enumerate() {
                 if i >= 256 {
@@ -302,7 +383,6 @@ impl TrayManager {
                 nid.szInfo[i] = c;
             }
 
-            // Copy title into szInfoTitle
             let title_wide = title.encode_utf16().chain(std::iter::once(0));
             for (i, c) in title_wide.enumerate() {
                 if i >= 64 {
@@ -338,14 +418,16 @@ impl TrayManager {
             nid.uFlags = NIF_ICON | NIF_TIP;
             nid.hIcon = icon;
 
+            let s = tray_strings();
             let tip = if is_recording {
-                "Nemotron Voice Input - Recording...\0"
+                s.tray_tip_recording()
             } else {
-                "Nemotron Voice Input\0"
+                s.tray_tip_idle()
             };
-            for (i, c) in tip.encode_utf16().enumerate() {
+            let tip_wide: Vec<u16> = tip.encode_utf16().chain(std::iter::once(0)).collect();
+            for (i, c) in tip_wide.iter().enumerate() {
                 if i < 128 {
-                    nid.szTip[i] = c;
+                    nid.szTip[i] = *c;
                 }
             }
 
