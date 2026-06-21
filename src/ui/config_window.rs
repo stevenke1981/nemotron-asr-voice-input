@@ -2,6 +2,7 @@
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::atomic::AtomicIsize;
+use std::sync::{Mutex, OnceLock};
 use tracing::{info, warn};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
@@ -11,6 +12,31 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::strings::{Strings, UiLang};
 use crate::config::AppConfig;
+
+/// Shared config so settings changes persist across window re-opens.
+static SHARED_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
+
+/// Initialize the shared config (call once from main).
+pub fn init_shared_config(config: AppConfig) {
+    let _ = SHARED_CONFIG.set(Mutex::new(config));
+}
+
+/// Load the current config from the shared mutex (falls back to `AppConfig::default()`).
+fn load_shared_config() -> AppConfig {
+    match SHARED_CONFIG.get() {
+        Some(m) => m.lock().ok().map(|g| g.clone()).unwrap_or_default(),
+        None => AppConfig::default(),
+    }
+}
+
+/// Update the shared config (called from on_save).
+fn store_shared_config(config: &AppConfig) {
+    if let Some(m) = SHARED_CONFIG.get() {
+        if let Ok(mut guard) = m.lock() {
+            *guard = config.clone();
+        }
+    }
+}
 
 // ── Control IDs ───────────────────────────────────────────────────────
 const IDC_UI_LANG: u32 = 2001;
@@ -116,7 +142,7 @@ struct ConfigDialogData {
 
 // ── Public entry point ────────────────────────────────────────────────
 
-pub fn show_config_window(parent_hwnd: HWND, config: &AppConfig) {
+pub fn show_config_window(parent_hwnd: HWND, _config: &AppConfig) {
     if SETTINGS_OPEN.load(Ordering::SeqCst) {
         let hwnd = CONFIG_HWND.load(Ordering::SeqCst);
         if hwnd != 0 {
@@ -127,8 +153,10 @@ pub fn show_config_window(parent_hwnd: HWND, config: &AppConfig) {
         return;
     }
 
+    // Always load from shared config so saved changes are reflected
+    let config = load_shared_config();
     let strings = Strings::new(UiLang::from_code(&config.ui.language));
-    create_window(parent_hwnd, config.clone(), strings);
+    create_window(parent_hwnd, config, strings);
 }
 
 fn create_window(parent: HWND, config: AppConfig, strings: Strings) { unsafe {
@@ -498,6 +526,8 @@ fn on_save(hwnd: HWND) {
     if let Ok(n) = edit_text(k).parse::<u64>() { data.config.injector.key_delay_ms = n; }
     data.config.injector.restore_clipboard = is_checked(r);
 
+    store_shared_config(&data.config);
+
     match data.config.save("config.toml") {
         Ok(()) => {
             info!("Settings saved");
@@ -529,11 +559,12 @@ fn on_ui_lang_changed(hwnd: HWND) {
     if new == data.strings.lang { return; }
 
     data.config.ui.language = new.code().to_string();
-    let config = data.config.clone();
+    store_shared_config(&data.config);
     let parent = unsafe { GetAncestor(hwnd, GA_PARENT) };
 
     destroy(hwnd);
-    show_config_window(parent, &config);
+    // show_config_window will re-read from shared config
+    show_config_window(parent, &data.config);
 }
 
 fn destroy(hwnd: HWND) {

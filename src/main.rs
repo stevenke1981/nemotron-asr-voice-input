@@ -223,7 +223,7 @@ fn main() -> Result<()> {
         app_config.hotkey.flush_modifiers,
         app_config.hotkey.flush_vk,
     );
-    info!("Hotkeys registered");
+    info!("Hotkeys registered: ToggleRecording(Ctrl+Alt+R), CycleLanguage(Ctrl+Alt+L), Flush(Ctrl+Alt+Space)");
 
     // Channels
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);
@@ -247,6 +247,9 @@ fn main() -> Result<()> {
             );
         }
     }
+
+    // Initialize shared config for settings window persistence
+    config_window::init_shared_config(app_config.clone());
 
     // Show settings GUI on first launch
     config_window::show_config_window(tray_manager.hwnd(), &app_config);
@@ -472,6 +475,7 @@ fn handle_hotkey_action(
     current_language: &Arc<std::sync::Mutex<String>>,
     tray: &TrayManager,
 ) {
+    info!("Hotkey action: {:?}", action);
     match action {
         HotkeyAction::ToggleRecording => {
             if state.is_recording.load(Ordering::SeqCst) {
@@ -501,6 +505,7 @@ fn start_recording(
 
     if let Err(e) = audio_capture.start() {
         error!("Failed to start recording: {}", e);
+        tray.show_notification("Error", &format!("Failed to start recording: {}", e));
         return;
     }
     state.is_recording.store(true, Ordering::SeqCst);
@@ -520,6 +525,7 @@ fn stop_recording(
     state.is_recording.store(false, Ordering::SeqCst);
     if let Err(e) = audio_capture.stop() {
         error!("Failed to stop recording: {}", e);
+        tray.show_notification("Error", &format!("Failed to stop recording: {}", e));
     }
     tray.set_recording_state(false);
 

@@ -94,7 +94,9 @@ impl HotkeyManager {
         const WM_HOTKEY: u32 = 0x0312;
         if msg.message == WM_HOTKEY {
             let id = msg.wParam.0 as i32;
-            self.registered.get(&id).copied()
+            let action = self.registered.get(&id).copied();
+            tracing::trace!("WM_HOTKEY id={} -> {:?}", id, action);
+            action
         } else {
             None
         }
