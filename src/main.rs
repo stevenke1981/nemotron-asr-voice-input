@@ -26,6 +26,8 @@ use asr::{AsrConfig, TranscriptResult};
 use ui::strings::{Strings, UiLang};
 use ui::tray::{TrayAction, TrayManager};
 use ui::config_window;
+use ui::gui::app::spawn_gui;
+use ui::gui::state::{GuiAction, GuiSnapshot, TranscriptEntry};
 
 /// Nemotron ASR Voice Input - Real-time speech recognition and text injection.
 #[derive(Parser, Debug)]
@@ -105,6 +107,18 @@ impl AppState {
             conversion_mode: std::sync::Mutex::new(convert::ConversionMode::None),
         }
     }
+}
+
+/// Generate HH:MM:SS timestamp from system time.
+fn simple_timestamp() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = now.as_secs();
+    let hours = (total_secs / 3600) % 24;
+    let mins = (total_secs / 60) % 60;
+    let secs = total_secs % 60;
+    format!("{:02}:{:02}:{:02}", hours, mins, secs)
 }
 
 fn main() -> Result<()> {
@@ -316,7 +330,30 @@ fn main() -> Result<()> {
     // Store tray sender for Settings window
     let _tray_tx_for_settings = tray_tx.clone();
 
+    // ── GUI initialization ──────────────────────────────────
+    let gui_snapshot = Arc::new(std::sync::Mutex::new(GuiSnapshot {
+        is_recording: false,
+        current_language: app_config.language.language.clone(),
+        conversion_mode: app_config.conversion.mode.clone(),
+        latest_final_text: String::new(),
+        latest_partial_text: String::new(),
+        history: Vec::new(),
+    }));
+
+    let (gui_snapshot_tx, gui_snapshot_rx) = crossbeam::channel::bounded::<GuiSnapshot>(256);
+    let (gui_action_tx, gui_action_rx) = crossbeam::channel::unbounded::<GuiAction>();
+    let show_overlay = Arc::new(AtomicBool::new(false));
+
+    let _gui_handle = spawn_gui(
+        gui_snapshot.clone(),
+        gui_snapshot_rx,
+        gui_action_tx.clone(),
+        show_overlay.clone(),
+    );
+
     // ── Audio capture processing thread ──────────────────────────────
+    let gui_snapshot_for_audio = gui_snapshot.clone();
+    let gui_snapshot_tx_for_audio = gui_snapshot_tx.clone();
     let audio_state = state.clone();
     let audio_tx = transcript_tx.clone();
     let audio_ringbuf = audio_capture.ringbuf().clone();
@@ -435,9 +472,26 @@ fn main() -> Result<()> {
                             }
                             // Update shared last_transcript for injection on stop
                             *audio_state.last_transcript.lock().unwrap() = result.text.clone();
+                            // Send snapshot to GUI (before moving result)
+                            let result_clone = result.clone();
                             if audio_tx.send(result).is_err() {
                                 break;
                             }
+                            let mut snap = gui_snapshot_for_audio.lock().unwrap();
+                            let trimmed = result_clone.text.trim().to_string();
+                            if result_clone.is_final {
+                                snap.latest_final_text = trimmed.clone();
+                                snap.latest_partial_text.clear();
+                                snap.history.push(TranscriptEntry {
+                                    text: trimmed,
+                                    timestamp: simple_timestamp(),
+                                    language: asr_config_clone.language.clone(),
+                                });
+                            } else {
+                                snap.latest_partial_text = trimmed;
+                            }
+                            snap.is_recording = audio_state.is_recording.load(Ordering::SeqCst);
+                            let _ = gui_snapshot_tx_for_audio.send(snap.clone());
                         }
                     }
                     Err(e) => {
@@ -585,6 +639,50 @@ fn main() -> Result<()> {
                         }
                         TrayAction::Exit => {
                             info!("Tray: Exit requested");
+                            state.is_running.store(false, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+
+                // Check for GUI actions
+                while let Ok(gui_action) = gui_action_rx.try_recv() {
+                    match gui_action {
+                        GuiAction::ToggleRecording => {
+                            if state.is_recording.load(Ordering::SeqCst) {
+                                stop_recording(&state, &mut audio_capture, &mut injector, &tray_manager);
+                            } else {
+                                start_recording(&state, &mut audio_capture, &tray_manager);
+                            }
+                        }
+                        GuiAction::CycleLanguage => {
+                            cycle_language(&language_list, &current_language, &tray_manager);
+                        }
+                        GuiAction::Flush => {
+                            info!("GUI: Flush triggered");
+                            audio_capture.clear_ringbuf();
+                        }
+                        GuiAction::SetLanguage(lang) => {
+                            *current_language.lock().unwrap() = lang;
+                        }
+                        GuiAction::SaveConfig(_cfg) => {
+                            info!("GUI: Config save requested (full impl in Phase 2)");
+                        }
+                        GuiAction::ShowOverlay(show) => {
+                            info!("GUI: Overlay toggled: {}", show);
+                        }
+                        GuiAction::DeleteHistoryEntry(idx) => {
+                            let snap = gui_snapshot.lock().unwrap();
+                            if idx < snap.history.len() {
+                                // Can't remove from locked snapshot easily;
+                                // this will be handled properly in Phase 2
+                            }
+                        }
+                        GuiAction::ClearHistory => {
+                            gui_snapshot.lock().unwrap().history.clear();
+                        }
+                        GuiAction::Exit => {
+                            info!("GUI: Exit requested");
                             state.is_running.store(false, Ordering::SeqCst);
                             break;
                         }
