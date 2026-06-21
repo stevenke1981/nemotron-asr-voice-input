@@ -122,8 +122,8 @@ impl Default for AudioConfig {
         Self {
             sample_rate: 16000,
             channels: 1,
-            chunk_size_ms: 560,
-            ringbuf_capacity: 8960 * 4, // ~2.24 seconds
+            chunk_size_ms: 700,
+            ringbuf_capacity: 11200 * 4, // ~2.8 seconds (safe for 700ms chunks)
             device_name: String::new(),
         }
     }

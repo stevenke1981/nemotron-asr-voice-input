@@ -33,3 +33,13 @@
 **Trigger:** Settings window language change was lost on reopen because `show_config_window` always used the original `app_config` from `main()`. A shared mutable config (`Arc<Mutex<>>`) was needed.
 **Rule:** When the settings dialog can modify config at runtime and needs to reflect those changes on reopen, use a shared state (e.g. `OnceLock<Mutex<AppConfig>>` in the config_window module). Seed it from `main()` with `init_shared_config()`, have the save handler update it via `store_shared_config()`, and have the open handler read from it via `load_shared_config()`.
 **Source:** fix: settings now persist across window re-opens via shared config; add hotkey tracing
+---
+## Lesson #8 — 2026-06-21
+**Trigger:** ASR engine crash at startup — `'vocab_size' does not exist in the metadata` from sherpa-onnx `online-transducer-nemo-model.cc`.
+**Rule:** Always use sherpa-onnx's official pre-exported model packages (from their GitHub Releases) rather than community-exported ONNX models from HuggingFace. Community models often lack required metadata (`vocab_size`, `context_size`) and use Xet split format (`.onnx` + `.onnx.data`) that sherpa-onnx does not fully support. Check https://k2-fsa.github.io/sherpa/onnx/nemo/nemotron-streaming.html for the official multilingual model packages.
+**Source:** fix: switch to sherpa-onnx official Nemotron model to fix ASR crash
+---
+## Lesson #9 — 2026-06-21
+**Trigger:** sherpa-onnx C++ assertion crash `features.cc:GetFrames:188 0 + 65 > 55` on first recording hotkey press — model metadata T_=65 frames (650ms) but chunk_size_ms=560ms only provides 56 frames.
+**Rule:** When feeding audio to sherpa-onnx streaming transducer models, ensure `chunk_size_ms` provides enough frames for the model's `T_` (total receptive field) metadata value plus snip_edges overhead. For zipformer2 models: `T_` = model metadata `"T"` in frames (10ms each), and snip_edges=true adds ~25ms frame_length overhead. Formula: `chunk_ms >= (T_ * 10 + 25) * 1000 / 16000`. For Nemotron (T_=65): chunk_ms >= 675, round up to 700. Before changing, check model metadata by running with `config_.debug = true` to see `T_` and `decode_chunk_len_` values.
+**Source:** fix: increase chunk_size_ms from 560 to 700 to prevent sherpa-onnx crash
