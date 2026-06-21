@@ -1,0 +1,23 @@
+[2m2026-06-21T16:27:29.172284Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Nemotron Voice Input v0.0.0
+[2m2026-06-21T16:27:29.173486Z[0m [32m INFO[0m [2mnemotron_voice_input::download[0m[2m:[0m All required model files present in "models"
+[2m2026-06-21T16:27:29.173937Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Starting interactive mode
+[2m2026-06-21T16:27:29.179358Z[0m [32m INFO[0m [2mnemotron_voice_input::audio::capture[0m[2m:[0m Using audio input device: 麥克風 (Realtek(R) Audio)
+[2m2026-06-21T16:27:29.187139Z[0m [32m INFO[0m [2mnemotron_voice_input::audio::capture[0m[2m:[0m Default input config: 48000 Hz, 2 channels, F32
+[2m2026-06-21T16:27:29.187671Z[0m [32m INFO[0m [2mnemotron_voice_input::hotkey::register[0m[2m:[0m Registered hotkey ToggleRecording (mods=0x4006, vk=0x71)
+[2m2026-06-21T16:27:29.187855Z[0m [32m INFO[0m [2mnemotron_voice_input::hotkey::register[0m[2m:[0m Registered hotkey CycleLanguage (mods=0x4003, vk=0x4c)
+[2m2026-06-21T16:27:29.187936Z[0m [32m INFO[0m [2mnemotron_voice_input::hotkey::register[0m[2m:[0m Registered hotkey Flush (mods=0x4003, vk=0x20)
+[2m2026-06-21T16:27:29.188017Z[0m [32m INFO[0m [2mnemotron_voice_input::hotkey::register[0m[2m:[0m Registered hotkey PushToTalk (mods=0x4006, vk=0x4c)
+[2m2026-06-21T16:27:29.188113Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Hotkeys registered: ToggleRecording(Ctrl+Shift+F2), CycleLanguage(Ctrl+Alt+L), Flush(Ctrl+Alt+Space), PushToTalk(Ctrl+Shift+L)
+[2m2026-06-21T16:27:29.188199Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m UI language: Chinese
+[2m2026-06-21T16:27:29.190000Z[0m [32m INFO[0m [2mnemotron_voice_input::ui::tray[0m[2m:[0m Hidden tray window created (HWND=HWND(0x180afc))
+[2m2026-06-21T16:27:29.206082Z[0m [32m INFO[0m [2mnemotron_voice_input::ui::tray[0m[2m:[0m Tray icon added
+[2m2026-06-21T16:27:29.206263Z[0m [32m INFO[0m [2mnemotron_voice_input::ui::tray[0m[2m:[0m System tray initialized
+[2m2026-06-21T16:27:29.238553Z[0m [32m INFO[0m [2mnemotron_voice_input::ui::config_window[0m[2m:[0m Config window opened
+[2m2026-06-21T16:27:29.239024Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Audio thread priority set to 2
+[2m2026-06-21T16:27:29.239331Z[0m [32m INFO[0m [2mnemotron_voice_input::asr::sherpa[0m[2m:[0m All required model files present in "models"
+[2m2026-06-21T16:27:29.242193Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Chinese text converter initialized
+[2m2026-06-21T16:27:29.242415Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Ready. Press Ctrl+Shift+F2 to start/stop recording, Ctrl+Shift+L for push-to-talk. Language: zh
+[2m2026-06-21T16:27:32.321334Z[0m [32m INFO[0m [2mnemotron_voice_input::asr::sherpa[0m[2m:[0m Sherpa ASR engine initialized successfully
+[2m2026-06-21T16:27:32.321524Z[0m [32m INFO[0m [2mnemotron_voice_input::asr::sherpa[0m[2m:[0m Language set to: zh
+[2m2026-06-21T16:27:32.321609Z[0m [32m INFO[0m [2mnemotron_voice_input::asr::sherpa[0m[2m:[0m VAD enabled
+[2m2026-06-21T16:27:32.321701Z[0m [32m INFO[0m [2mnemotron_voice_input[0m[2m:[0m Audio processing: capture 48000 Hz → target 16000 Hz, chunk 33600 → 11200 samples

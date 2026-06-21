@@ -427,10 +427,14 @@ fn main() -> Result<()> {
 
                 match engine.get_transcript() {
                     Ok(result) => {
-                        if !result.text.is_empty() && result.text != last_text {
-                            last_text = result.text.clone();
+                        if !result.text.is_empty() && (result.is_final || result.text != last_text) {
+                            // Only update last_text for NEW partial text (not for is_final
+                            // duplicates, so the next utterance can still send its first partial)
+                            if result.text != last_text {
+                                last_text = result.text.clone();
+                            }
                             // Update shared last_transcript for injection on stop
-                            *audio_state.last_transcript.lock().unwrap() = last_text.clone();
+                            *audio_state.last_transcript.lock().unwrap() = result.text.clone();
                             if audio_tx.send(result).is_err() {
                                 break;
                             }
