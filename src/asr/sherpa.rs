@@ -27,9 +27,9 @@ impl SherpaAsrEngine {
     /// Check if all required model files exist.
     fn check_model_files(model_dir: &Path) -> Result<(), AsrError> {
         let required = [
-            "encoder.onnx",
-            "decoder.onnx",
-            "joint.onnx",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
             "tokens.txt",
         ];
         let optional = ["silero_vad.onnx"];
@@ -70,9 +70,9 @@ impl AsrEngine for SherpaAsrEngine {
             },
             model_config: sherpa_onnx::OnlineModelConfig {
                 transducer: sherpa_onnx::OnlineTransducerModelConfig {
-                    encoder: Some(format!("{}/encoder.onnx", model_dir_str)),
-                    decoder: Some(format!("{}/decoder.onnx", model_dir_str)),
-                    joiner: Some(format!("{}/joint.onnx", model_dir_str)),
+                    encoder: Some(format!("{}/encoder.int8.onnx", model_dir_str)),
+                    decoder: Some(format!("{}/decoder.int8.onnx", model_dir_str)),
+                    joiner: Some(format!("{}/joiner.int8.onnx", model_dir_str)),
                 },
                 tokens: Some(format!("{}/tokens.txt", model_dir_str)),
                 num_threads: config.num_threads as i32,
