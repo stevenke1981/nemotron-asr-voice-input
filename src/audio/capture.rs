@@ -15,6 +15,8 @@ pub struct AudioCapture {
     is_capturing: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
+    /// The actual sample rate the device is running at (may differ from target).
+    pub(crate) capture_sample_rate: u32,
 }
 
 impl AudioCapture {
@@ -64,6 +66,7 @@ impl AudioCapture {
             is_capturing: Arc::new(AtomicBool::new(false)),
             sample_rate: target_sample_rate,
             channels: target_channels,
+            capture_sample_rate: default_config.sample_rate(),
         })
     }
 
@@ -76,47 +79,83 @@ impl AudioCapture {
 
         let ringbuf = self.ringbuf.clone();
         let is_capturing = self.is_capturing.clone();
-        let channels = self.channels;
 
-        let err_fn = move |err| {
-            error!("Audio stream error: {}", err);
-        };
-
-        let config = StreamConfig {
-            channels: self.channels,
+        // Attempt 1: target config (16000 Hz, 1 ch)
+        let target_cfg = StreamConfig {
+            channels: 1,
             sample_rate: self.sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let stream = self._device.build_input_stream(
-            config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !is_capturing.load(Ordering::SeqCst) {
-                    return;
-                }
+        let result = {
+            let cap = is_capturing.clone();
+            let buf = ringbuf.clone();
+            self._device.build_input_stream(
+                target_cfg,
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                    if !cap.load(Ordering::SeqCst) { return; }
+                    let _ = buf.push_slice(data);
+                },
+                move |err| error!("Audio stream error: {}", err),
+                None,
+            )
+        };
 
-                // If the device provides multi-channel, mix to mono
-                if channels > 1 {
-                    let frame_count = data.len() / channels as usize;
-                    for frame in 0..frame_count {
-                        let sum: f32 = (0..channels as usize)
-                            .map(|ch| data[frame * channels as usize + ch])
-                            .sum();
-                        let mono_sample = sum / channels as f32;
-                        let _ = ringbuf.push(mono_sample);
-                    }
-                } else {
-                    let _ = ringbuf.push_slice(data);
-                }
-            },
-            err_fn,
-            None,
-        )?;
+        let (stream, actual_rate, actual_channels) = match result {
+            Ok(s) => {
+                info!("Audio stream opened at {} Hz / 1 ch (target rate)", self.sample_rate);
+                (s, self.sample_rate, 1u16)
+            }
+            Err(_) => {
+                // Fall back to device default config (e.g. 48000 Hz, 2 ch)
+                let default_cfg = self._device.default_input_config()
+                    .context("No default input config available")?;
+                let dev_rate: u32 = default_cfg.sample_rate();
+                let dev_channels: u16 = default_cfg.channels();
+                info!("Falling back to device default: {} Hz, {} ch", dev_rate, dev_channels);
+
+                let cap2 = is_capturing.clone();
+                let buf2 = ringbuf.clone();
+                let ch = dev_channels;
+                let fallback_cfg = StreamConfig {
+                    channels: dev_channels,
+                    sample_rate: dev_rate,
+                    buffer_size: cpal::BufferSize::Default,
+                };
+
+                let s = self._device.build_input_stream(
+                    fallback_cfg,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        if !cap2.load(Ordering::SeqCst) { return; }
+                        if ch > 1 {
+                            let frame_count = data.len() / ch as usize;
+                            for frame in 0..frame_count {
+                                let sum: f32 = (0..ch as usize)
+                                    .map(|c| data[frame * ch as usize + c])
+                                    .sum();
+                                let _ = buf2.push(sum / ch as f32);
+                            }
+                        } else {
+                            let _ = buf2.push_slice(data);
+                        }
+                    },
+                    move |err| error!("Audio stream error: {}", err),
+                    None,
+                )?;
+
+                (s, dev_rate, dev_channels)
+            }
+        };
 
         stream.play().context("Failed to start audio stream")?;
         self.stream = Some(stream);
+        self.capture_sample_rate = actual_rate;
+        self.channels = actual_channels;
         self.is_capturing.store(true, Ordering::SeqCst);
-        info!("Audio capture started");
+        info!(
+            "Audio capture started ({} Hz, {} ch, target {} Hz)",
+            actual_rate, actual_channels, self.sample_rate
+        );
         Ok(())
     }
 
@@ -145,10 +184,16 @@ impl AudioCapture {
         self.is_capturing.load(Ordering::SeqCst)
     }
 
-    /// Get the audio sample rate.
+    /// Get the target audio sample rate (what the ASR expects).
     #[allow(dead_code)]
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    /// Get the actual capture sample rate (what the device provides).
+    /// May differ from the target rate — use for resampling.
+    pub fn capture_rate(&self) -> u32 {
+        self.capture_sample_rate
     }
 
     /// List available audio input devices.

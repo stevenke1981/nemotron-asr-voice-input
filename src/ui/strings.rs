@@ -117,8 +117,8 @@ impl Strings {
     // ── Balloon notifications ──
     pub fn notification_ready(&self) -> &'static str {
         match self.lang {
-            UiLang::English => "Ready. Press Ctrl+Alt+Shift+R to toggle recording.",
-            UiLang::Chinese => "就緒。按 Ctrl+Alt+Shift+R 切換錄音。",
+            UiLang::English => "Ready (see Settings for hotkey bindings)",
+            UiLang::Chinese => "就緒（設定視窗可查看快捷鍵）",
         }
     }
 

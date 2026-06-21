@@ -273,6 +273,7 @@ fn main() -> Result<()> {
     let audio_ringbuf = audio_capture.ringbuf().clone();
     let asr_config_clone = asr_config.clone();
     let _audio_language = current_language.clone();
+    let capture_sample_rate = audio_capture.capture_rate();
 
     let _audio_handle = std::thread::Builder::new()
         .name("audio-processor".into())
@@ -291,9 +292,26 @@ fn main() -> Result<()> {
                 }
             };
 
-            let chunk_samples = asr_config_clone.chunk_samples();
-            let mut temp_buf = vec![0.0f32; chunk_samples];
+            let target_rate: u32 = asr_config_clone.sample_rate; // 16000
+            let chunk_target = asr_config_clone.chunk_samples(); // samples at target_rate
+
+            // How many capture-rate samples we need per chunk
+            let chunk_capture = if capture_sample_rate != target_rate {
+                // Round up to avoid starving the ASR
+                ((chunk_target as u64 * capture_sample_rate as u64 + target_rate as u64 - 1)
+                    / target_rate as u64) as usize
+            } else {
+                chunk_target
+            };
+
+            let mut capture_buf = vec![0.0f32; chunk_capture];
+            let mut resample_buf = vec![0.0f32; chunk_target];
             let mut last_text = String::new();
+
+            info!(
+                "Audio processing: capture {} Hz → target {} Hz, chunk {} → {} samples",
+                capture_sample_rate, target_rate, chunk_capture, chunk_target
+            );
 
             while audio_state.is_running.load(Ordering::SeqCst) {
                 if !audio_state.is_recording.load(Ordering::SeqCst) {
@@ -302,18 +320,41 @@ fn main() -> Result<()> {
                 }
 
                 let available = audio_ringbuf.len();
-                if available < chunk_samples {
+                if available < chunk_capture {
                     std::thread::sleep(Duration::from_millis(20));
                     continue;
                 }
 
-                let to_read = temp_buf.len().min(available);
-                let read = audio_ringbuf.pop_slice(&mut temp_buf[..to_read]);
+                let to_read = capture_buf.len().min(available);
+                let read = audio_ringbuf.pop_slice(&mut capture_buf[..to_read]);
                 if read == 0 {
                     continue;
                 }
 
-                if let Err(e) = engine.feed_audio(&temp_buf[..read]) {
+                // Resample if needed (simple linear interpolation)
+                let feed_data: &[f32] = if capture_sample_rate == target_rate {
+                    &capture_buf[..read]
+                } else {
+                    let input = &capture_buf[..read];
+                    let input_len = input.len();
+                    let output_len = resample_buf.len().min(
+                        (input_len as u64 * target_rate as u64 / capture_sample_rate as u64) as usize,
+                    );
+                    if output_len == 0 { continue; }
+                    let ratio = input_len as f64 / output_len as f64;
+                    for i in 0..output_len {
+                        let src = i as f64 * ratio;
+                        let src_i = src.floor() as usize;
+                        let frac = src - src_i as f64;
+                        let a = input[src_i.min(input_len - 1)] as f64;
+                        let b = input[(src_i + 1).min(input_len - 1)] as f64;
+                        resample_buf[i] = (a + frac * (b - a)) as f32;
+                        resample_buf[i] = resample_buf[i].clamp(-1.0, 1.0);
+                    }
+                    &resample_buf[..output_len]
+                };
+
+                if let Err(e) = engine.feed_audio(feed_data) {
                     tracing::debug!("ASR feed error: {}", e);
                     continue;
                 }
@@ -355,8 +396,8 @@ fn main() -> Result<()> {
 
     // Main loop
     info!(
-        "Ready. Press Ctrl+Alt+Shift+R to start/stop recording. Language: {}",
-        asr_config.language
+        "Ready. Press {} to start/stop recording. Language: {}",
+        toggle_reg, asr_config.language
     );
 
     let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
