@@ -467,7 +467,7 @@ fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
     add_groupbox(hwnd, s.settings_hotkeys_section(), 8, gb, 432, 82);
     let mut cy = gb + 16;
     let hotkeys = [
-        (s.hotkey_toggle_label(), "Ctrl+Alt+R"),
+        (s.hotkey_toggle_label(), "Ctrl+Alt+Shift+R"),
         (s.hotkey_lang_label(), "Ctrl+Alt+L"),
         (s.hotkey_flush_label(), "Ctrl+Alt+Space"),
     ];

@@ -38,9 +38,9 @@ const MODEL_FILES: &[ModelFile] = &[
         expected_size: 1_100_000,
     },
     ModelFile {
-        filename: "tokens.txt",
-        description: "Token vocabulary (22 KB)",
-        expected_size: 22_000,
+        filename: "vocab.txt:tokens.txt",
+        description: "Token vocabulary (64 KB)",
+        expected_size: 64_000,
     },
     ModelFile {
         filename: "tokenizer.json",
@@ -74,14 +74,21 @@ pub fn check_model_files(model_dir: &Path) -> Result<bool> {
 }
 
 /// Download a single file from HuggingFace with progress display.
+/// If `filename` contains ":", the part before ":" is the remote name and
+/// the part after is the local name (e.g. "vocab.txt:tokens.txt").
 fn download_file(
     filename: &str,
     dest_dir: &Path,
     downloaded_bytes: &Arc<AtomicUsize>,
     _total_bytes: u64,
 ) -> Result<()> {
-    let url = format!("{}/{}", HF_BASE_URL, filename);
-    let dest_path = dest_dir.join(filename);
+    let (remote_name, local_name) = if let Some(pos) = filename.find(':') {
+        (&filename[..pos], &filename[pos + 1..])
+    } else {
+        (filename, filename)
+    };
+    let url = format!("{}/{}", HF_BASE_URL, remote_name);
+    let dest_path = dest_dir.join(local_name);
 
     // Skip if file exists and has reasonable size
     if dest_path.exists() {

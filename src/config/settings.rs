@@ -154,16 +154,15 @@ impl Default for InjectorConfig {
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
-            // MOD_ALT | MOD_CONTROL = 0x0002 | 0x0001 = 0x0003
-            // MOD_NOREPEAT = 0x4000
-            toggle_modifiers: 0x4003,
+            // MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT = 0x4007
+            toggle_modifiers: 0x4007,
             // 'R' virtual key
             toggle_vk: 0x52,
-            // MOD_ALT | MOD_CONTROL = 0x0002 | 0x0001 = 0x0003
+            // MOD_ALT | MOD_CONTROL | MOD_NOREPEAT = 0x4003
             lang_modifiers: 0x4003,
             // 'L' virtual key
             lang_vk: 0x4C,
-            // MOD_ALT | MOD_CONTROL = 0x0002 | 0x0001 = 0x0003
+            // MOD_ALT | MOD_CONTROL | MOD_NOREPEAT = 0x4003
             flush_modifiers: 0x4003,
             // VK_SPACE = 0x20
             flush_vk: 0x20,

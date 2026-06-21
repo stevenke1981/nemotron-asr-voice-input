@@ -223,7 +223,7 @@ fn main() -> Result<()> {
         app_config.hotkey.flush_modifiers,
         app_config.hotkey.flush_vk,
     );
-    info!("Hotkeys registered: ToggleRecording(Ctrl+Alt+R), CycleLanguage(Ctrl+Alt+L), Flush(Ctrl+Alt+Space)");
+    info!("Hotkeys registered: ToggleRecording(Ctrl+Alt+Shift+R), CycleLanguage(Ctrl+Alt+L), Flush(Ctrl+Alt+Space)");
 
     // Channels
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);
@@ -345,7 +345,7 @@ fn main() -> Result<()> {
 
     // Main loop
     info!(
-        "Ready. Press Ctrl+Alt+R to start/stop recording. Language: {}",
+        "Ready. Press Ctrl+Alt+Shift+R to start/stop recording. Language: {}",
         asr_config.language
     );
 
