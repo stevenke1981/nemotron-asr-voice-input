@@ -154,8 +154,8 @@ impl Default for InjectorConfig {
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
-            // MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT = 0x4007
-            toggle_modifiers: 0x4007,
+            // MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT = 0x4006 (no Alt)
+            toggle_modifiers: 0x4006,
             // VK_F2 = 0x71 (rarely conflicts with other apps)
             toggle_vk: 0x71,
             // MOD_ALT | MOD_CONTROL | MOD_NOREPEAT = 0x4003
