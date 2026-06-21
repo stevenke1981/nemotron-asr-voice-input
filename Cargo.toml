@@ -13,7 +13,7 @@ sherpa-onnx-sys = "1.13"
 cpal = "0.18"
 
 # Windows API (text injection + hotkey + system tray)
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
@@ -22,6 +22,9 @@ windows = { version = "0.58", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_Graphics_Gdi",
 ] }
 
 # Serialization
@@ -44,7 +47,5 @@ thiserror = "2"
 # CLI argument parsing
 clap = { version = "4", features = ["derive"] }
 
-
-
-[build-dependencies]
-# Nothing needed yet
+# HTTP client for model downloads
+ureq = { version = "2", features = ["tls"] }
