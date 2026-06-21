@@ -18,6 +18,7 @@ use audio::AudioCapture;
 use config::AppConfig;
 use download::print_model_status;
 use hotkey::register::HotkeyAction;
+use hotkey::register::format_hotkey;
 use hotkey::HotkeyManager;
 use injector::{CompositeInjector, InjectStrategy, TextInjector};
 use asr::{AsrConfig, TranscriptResult};
@@ -223,7 +224,16 @@ fn main() -> Result<()> {
         app_config.hotkey.flush_modifiers,
         app_config.hotkey.flush_vk,
     );
-    info!("Hotkeys registered: ToggleRecording(Ctrl+Alt+Shift+R), CycleLanguage(Ctrl+Alt+L), Flush(Ctrl+Alt+Space)");
+    let toggle_reg = hotkey_manager.actual_key(HotkeyAction::ToggleRecording)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(app_config.hotkey.toggle_modifiers, app_config.hotkey.toggle_vk));
+    let lang_reg = hotkey_manager.actual_key(HotkeyAction::CycleLanguage)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(app_config.hotkey.lang_modifiers, app_config.hotkey.lang_vk));
+    let flush_reg = hotkey_manager.actual_key(HotkeyAction::Flush)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(app_config.hotkey.flush_modifiers, app_config.hotkey.flush_vk));
+    info!("Hotkeys registered: ToggleRecording({}), CycleLanguage({}), Flush({})", toggle_reg, lang_reg, flush_reg);
 
     // Channels
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);

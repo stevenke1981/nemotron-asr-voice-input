@@ -12,6 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::strings::{Strings, UiLang};
 use crate::config::AppConfig;
+use crate::hotkey::register::format_hotkey;
 
 /// Shared config so settings changes persist across window re-opens.
 static SHARED_CONFIG: OnceLock<Mutex<AppConfig>> = OnceLock::new();
@@ -400,7 +401,6 @@ fn parse_lang(text: &str) -> &str {
 // the frame and returns the bottom edge. Inner controls use `cy` (starting
 // at `gb + padding`) so they render inside the groupbox. `y` advances to
 // the groupbox bottom + gap for the next section.
-
 fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
     let mut y = 12;
     let gap = 4;
@@ -466,10 +466,13 @@ fn create_controls(hwnd: HWND, config: &AppConfig, s: &Strings) {
     let gb = y;
     add_groupbox(hwnd, s.settings_hotkeys_section(), 8, gb, 432, 82);
     let mut cy = gb + 16;
+    let toggle_key = format_hotkey(config.hotkey.toggle_modifiers, config.hotkey.toggle_vk);
+    let lang_key = format_hotkey(config.hotkey.lang_modifiers, config.hotkey.lang_vk);
+    let flush_key = format_hotkey(config.hotkey.flush_modifiers, config.hotkey.flush_vk);
     let hotkeys = [
-        (s.hotkey_toggle_label(), "Ctrl+Alt+Shift+R"),
-        (s.hotkey_lang_label(), "Ctrl+Alt+L"),
-        (s.hotkey_flush_label(), "Ctrl+Alt+Space"),
+        (s.hotkey_toggle_label(), toggle_key.as_str()),
+        (s.hotkey_lang_label(), lang_key.as_str()),
+        (s.hotkey_flush_label(), flush_key.as_str()),
     ];
     for (action, key) in &hotkeys {
         add_static(hwnd, &s.settings_hotkey_line(action, key), 22, cy, 400, 20);

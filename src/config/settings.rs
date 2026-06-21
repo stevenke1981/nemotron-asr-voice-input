@@ -156,8 +156,8 @@ impl Default for HotkeyConfig {
         Self {
             // MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT = 0x4007
             toggle_modifiers: 0x4007,
-            // 'R' virtual key
-            toggle_vk: 0x52,
+            // VK_F2 = 0x71 (rarely conflicts with other apps)
+            toggle_vk: 0x71,
             // MOD_ALT | MOD_CONTROL | MOD_NOREPEAT = 0x4003
             lang_modifiers: 0x4003,
             // 'L' virtual key
