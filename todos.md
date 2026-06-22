@@ -7,6 +7,45 @@
 
 ---
 
+## 2026-06-22：語音轉錄缺字根因與修正（P0）
+
+### 根因（已用 `target/release/voices` 實錄音檔重現）
+
+1. **主要根因：48 kHz 麥克風降採樣到 16 kHz 時沒有 anti-alias low-pass。**
+   - 實際裝置紀錄為 Realtek `48,000 Hz / 2 ch / F32`，程式會 fallback 到 48 kHz，再送往 16 kHz Nemotron。
+   - 舊 `resample_into()` 對 48k→16k 的比例為整數 3，linear interpolation 會退化成每 3 個 sample 直接取 1 個（decimation）。8 kHz 以上能量因此 alias 回語音頻帶，破壞子音與音節特徵，Nemotron 會漏掉句中詞或以錯字替代。
+   - 代表錄音交叉驗證（Whisper 僅用來確認音檔內容完整）：
+
+| 錄音 | 音檔內容對照 | 修正前 Nemotron |
+|------|--------------|-----------------|
+| `20260622-055807-909164.wav` | 許／去測試看能不能正常 | 去測試看能不能（漏「正常」） |
+| `20260622-055813-907448.wav` | 繼續測試有沒有正常 | 一序有沒有正常（漏「測試」） |
+| `20260622-055832-052184.wav` | 謝謝你，我會不會覺得很累 | 所以我大西花（整句聲學特徵失真） |
+| `20260622-055839-702566.wav` | 所以聽得到我在講什麼 | 所以講什麼（漏「聽得到我在」） |
+
+2. **次要根因：finalize 順序錯誤且即時／batch 各寫一套。**
+   - `--file` 路徑在 `input_finished()` 前先 `engine.reset()`，把已有 hypothesis 清空後才讀結果；修正前可穩定重現 partial 有字、`=== Full Transcript ===` 為空。
+   - `input_finished()` 本身不足以替 Nemotron 的 `T=65` encoder 提供最後 token 所需的 future context；`20260622-055839-702566.wav` 在無 context 時只得到「所以聽得到我在」，補 800 ms silence 後得到完整「所以聽得到我在講什麼」。
+   - VAD 開關 A/B 輸出完全相同，證實「VAD 跳過 padding」不是根因。正確順序統一為：fresh stream → feed 全部 audio → feed 800 ms trailing context → `input_finished()` → `while is_ready()` decode → 讀 final result → fresh stream。
+
+3. **診斷工具問題：WAV reader 把 header 寫死為 44 bytes。**
+   - 含 `JUNK`／extended `fmt` chunk 的標準 WAV 會把 header bytes 當 PCM，讓 A/B 結果受到額外雜訊干擾。
+
+### 修正項目
+
+- [x] 以 `rubato::FftFixedInOut` stateful band-limited resampler 取代無 low-pass 的 linear decimation。
+- [x] 每段錄音開始時清除 resampler filter history；停止時 flush partial block 與 filter delay，並維持精確音訊長度。
+- [x] 新增 anti-alias 回歸測試：48 kHz 的 12 kHz tone 降到 16 kHz 後 RMS 必須 `< 0.02`，避免 alias 成 4 kHz。
+- [x] 新增 speech-band／長度回歸測試：1 kHz tone 保留且 1 秒輸出恰為 16,000 samples。
+- [x] 新增共用 `decode_complete_utterance()`，即時與 batch 使用同一個 sherpa-onnx canonical finalize 流程。
+- [x] 加入符合 `T=65` receptive field 的 800 ms trailing context；移除未經證實的 VAD toggle 與固定 60 次 decode 上限。
+- [x] 改為走訪 RIFF chunks 的 PCM16 mono WAV parser，並加入 non-44-byte header 測試。
+- [x] 完整驗證：17 tests 全過、`cargo clippy --all-targets` 成功（僅 23 個既有 warnings）、release build 成功、30 檔 batch 中 29 檔產生 final。
+- [!] 嚴格 `-D warnings` 仍被本任務前既有的 UI/dead-code/clippy warnings 阻擋；本次新增的 resampler／finalize／WAV parser 沒有新增 clippy warning。
+- [x] git commit + push，確認 local/remote SHA 一致。
+
+---
+
 ## 階段一：MVP 最小可行產品
 
 ### Milestone 1: 專案骨架 ✅

@@ -16,6 +16,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use audio::AudioCapture;
+use audio::resampler::StreamingResampler;
 use config::AppConfig;
 use download::print_model_status;
 use hotkey::register::HotkeyAction;
@@ -339,7 +340,13 @@ fn main() -> Result<()> {
             };
 
             let mut capture_buf = vec![0.0f32; chunk_capture];
-            let mut resample_buf = vec![0.0f32; chunk_target];
+            let mut resampler = match StreamingResampler::new(capture_sample_rate, target_rate) {
+                Ok(resampler) => resampler,
+                Err(e) => {
+                    error!("Failed to create audio resampler: {}", e);
+                    return;
+                }
+            };
             let mut last_text = String::new();
             let mut last_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
             let mut last_vad_threshold = f32::from_bits(
@@ -348,29 +355,6 @@ fn main() -> Result<()> {
             // Full-audio buffer: accumulates ALL resampled audio during recording.
             // On stop, fed to a fresh ASR stream for complete-context decode.
             let mut full_audio: Vec<f32> = Vec::new();
-
-            // Helper: resample input at capture_rate → target_rate, extend output vec.
-            let mut resample_into = |input: &[f32], output: &mut Vec<f32>| {
-                if capture_sample_rate == target_rate {
-                    output.extend_from_slice(input);
-                    return;
-                }
-                if input.is_empty() { return; }
-                let output_len = resample_buf.len().min(
-                    (input.len() as u64 * target_rate as u64 / capture_sample_rate as u64) as usize,
-                );
-                if output_len == 0 { return; }
-                let ratio = input.len() as f64 / output_len as f64;
-                for i in 0..output_len {
-                    let src = i as f64 * ratio;
-                    let src_i = src.floor() as usize;
-                    let frac = src - src_i as f64;
-                    let a = input[src_i.min(input.len() - 1)] as f64;
-                    let b = input[(src_i + 1).min(input.len() - 1)] as f64;
-                    resample_buf[i] = (a + frac * (b - a)).clamp(-1.0, 1.0) as f32;
-                }
-                output.extend_from_slice(&resample_buf[..output_len]);
-            };
 
             info!(
                 "Audio processing: capture {} Hz → target {} Hz, chunk {} → {} samples",
@@ -384,6 +368,7 @@ fn main() -> Result<()> {
                 if is_recording && !was_recording {
                     last_text.clear();
                     full_audio.clear();
+                    resampler.reset();
                     audio_state.full_audio_done.store(false, Ordering::SeqCst);
                     if audio_state.engine_reset.swap(false, Ordering::SeqCst) {
                         if let Err(e) = engine.reset() {
@@ -403,7 +388,10 @@ fn main() -> Result<()> {
                         let r = capture_buf.len().min(remaining);
                         let read = audio_ringbuf.pop_slice(&mut capture_buf[..r]);
                         if read == 0 { break; }
-                        resample_into(&capture_buf[..read], &mut full_audio);
+                        if let Err(e) = resampler.process_into(&capture_buf[..read], &mut full_audio) {
+                            tracing::error!("Audio resampling failed while draining: {}", e);
+                            break;
+                        }
                     }
                     std::thread::sleep(Duration::from_millis(50));
                     loop {
@@ -412,7 +400,14 @@ fn main() -> Result<()> {
                         let r = capture_buf.len().min(remaining);
                         let read = audio_ringbuf.pop_slice(&mut capture_buf[..r]);
                         if read == 0 { break; }
-                        resample_into(&capture_buf[..read], &mut full_audio);
+                        if let Err(e) = resampler.process_into(&capture_buf[..read], &mut full_audio) {
+                            tracing::error!("Audio resampling failed during final drain: {}", e);
+                            break;
+                        }
+                    }
+
+                    if let Err(e) = resampler.flush_into(&mut full_audio) {
+                        tracing::error!("Audio resampler flush failed: {}", e);
                     }
 
                     if !full_audio.is_empty() {
@@ -421,61 +416,9 @@ fn main() -> Result<()> {
                             tracing::error!("Failed to save utterance audio: {}", e);
                         }
 
-                        // Temporarily disable VAD for full-audio decode.
-                        // VAD causes the streaming feature extractor to skip
-                        // non-speech frames. The 0.66s silence padding that we add
-                        // below is classified as non-speech by VAD and skipped,
-                        // which means the decoder never sees trailing silence.
-                        // Without trailing silence, the transducer decoder cannot
-                        // finalize the last tokens — the last 1-2 characters are
-                        // silently truncated from the hypothesis.
-                        if asr_config_clone.use_vad {
-                            let _ = engine.set_vad(false);
-                        }
-
-                        // Fresh stream for full-audio decode (complete context)
-                        let _ = engine.reset();
-
-                        // Pad with 0.66s of silence so the decoder can finalize
-                        // trailing characters (streaming ASR needs trailing
-                        // frames to produce the complete hypothesis).
-                        // 0.66s matches the canonical sherpa-onnx Python example
-                        // (online-decode-files.py).
-                        let pad_len = (target_rate as f64 * 0.66) as usize;
-                        full_audio.extend(std::iter::repeat(0.0f32).take(pad_len));
-
-                        if let Err(e) = engine.feed_audio(&full_audio) {
-                            tracing::error!("Full-audio feed error: {}", e);
-                        } else {
-                            let _ = engine.input_finished();
-                            let mut final_text = String::new();
-
-                            // Main decode loop (process all available feature chunks).
-                            // IMPORTANT: Do NOT break on r.is_final! When VAD or endpoint
-                            // detection fires, is_final=true but there are still decoded
-                            // frames that refine the hypothesis. Breaking early would lose
-                            // the last 1-2 characters. Match the canonical sherpa-onnx
-                            // streaming_zipformer.rs pattern: decode until !is_ready().
-                            for _ in 0..60 {
-                                if !engine.is_ready() { break; }
-                                match engine.get_transcript() {
-                                    Ok(r) => {
-                                        if !r.text.is_empty() { final_text = r.text.clone(); }
-                                    }
-                                    Err(e) => { tracing::debug!("Full-audio decode: {}", e); break; }
-                                }
-                            }
-
-                            // decode_final() calls get_result() one more time WITHOUT
-                            // the is_ready() guard, matching the canonical sherpa-onnx
-                            // pattern: decode-loop-then-get_result.
-                            if let Ok(r) = engine.decode_final() {
-                                if !r.text.is_empty() {
-                                    final_text = r.text.clone();
-                                }
-                            }
-
-                            if !final_text.is_empty() && final_text != last_text {
+                        match asr::decode_complete_utterance(engine.as_mut(), &full_audio) {
+                            Ok(result) if !result.text.is_empty() && result.text != last_text => {
+                                let final_text = result.text;
                                 tracing::info!("Full-audio transcript: {}", final_text);
                                 last_text = final_text.clone();
                                 *audio_state.last_transcript.lock().unwrap() = final_text.clone();
@@ -492,19 +435,10 @@ fn main() -> Result<()> {
                                 snap.is_recording = false;
                                 let _ = gui_snapshot_tx_for_audio.send(snap.clone());
                             }
+                            Ok(_) => {}
+                            Err(e) => tracing::error!("Full-audio decode failed: {}", e),
                         }
                     }
-
-                    // Restore VAD before creating the next recording's stream.
-                    if asr_config_clone.use_vad {
-                        let _ = engine.set_vad(true);
-                    }
-
-                    // Reset engine for next recording — the stream is in an
-                    // "input_finished" state and cannot accept new audio without
-                    // a fresh stream. Without this, the next utterance crashes
-                    // the C++ decoder.
-                    let _ = engine.reset();
                     audio_state.full_audio_done.store(true, Ordering::SeqCst);
                 }
 
@@ -529,7 +463,10 @@ fn main() -> Result<()> {
                 // Resample and accumulate into full_audio
                 let input_slice = &capture_buf[..read];
                 let pre_len = full_audio.len();
-                resample_into(input_slice, &mut full_audio);
+                if let Err(e) = resampler.process_into(input_slice, &mut full_audio) {
+                    tracing::error!("Audio resampling failed: {}", e);
+                    continue;
+                }
                 let feed_data = &full_audio[pre_len..];
 
                 // Runtime VAD toggle + threshold
@@ -1094,71 +1031,72 @@ fn run_batch_transcription(file_path: &PathBuf, asr_config: &AsrConfig) -> Resul
     info!("Transcribing file: {:?}", file_path);
 
     let mut engine = asr::create_asr_engine(asr_config)?;
-
     let wav_data = std::fs::read(file_path).context("Failed to read WAV file")?;
-
-    let sample_rate = asr_config.sample_rate;
-    let samples: Vec<f32> = if wav_data.len() > 44 {
-        let data_start = 44;
-        let data = &wav_data[data_start..];
-        data.chunks(2)
-            .filter_map(|c| {
-                if c.len() >= 2 {
-                    Some(i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else {
-        return Err(anyhow::anyhow!("Invalid WAV file (too small)"));
-    };
+    let (sample_rate, samples) = parse_pcm16_mono_wav(&wav_data)?;
+    anyhow::ensure!(
+        sample_rate == asr_config.sample_rate,
+        "WAV sample rate is {} Hz, but ASR expects {} Hz",
+        sample_rate,
+        asr_config.sample_rate
+    );
 
     info!("Loaded {} samples at {} Hz", samples.len(), sample_rate);
-
-    let chunk_size = asr_config.chunk_samples();
-    let mut full_text = String::new();
-
-    for chunk in samples.chunks(chunk_size) {
-        engine.feed_audio(chunk)?;
-
-        match engine.get_transcript()? {
-            result if result.is_final => {
-                if !result.text.is_empty() {
-                    if !full_text.is_empty() {
-                        full_text.push(' ');
-                    }
-                    full_text.push_str(&result.text);
-                    println!("[Final] {}", result.text);
-                }
-            }
-            result if !result.text.is_empty() => {
-                print!("\r[Partial] {}", result.text);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-            }
-            _ => {}
-        }
-
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    engine.reset()?;
-    match engine.get_transcript()? {
-        result if !result.text.is_empty() => {
-            if !full_text.is_empty() {
-                full_text.push(' ');
-            }
-            full_text.push_str(&result.text);
-            println!("\n[Final] {}", result.text);
-        }
-        _ => {}
-    }
+    let result = asr::decode_complete_utterance(engine.as_mut(), &samples)?;
 
     println!("\n=== Full Transcript ===");
-    println!("{}", full_text);
+    println!("{}", result.text);
 
     Ok(())
+}
+
+/// Parse a RIFF/WAVE file instead of assuming a fixed 44-byte header.
+/// Encoders may insert JUNK, LIST, or extended fmt chunks before the PCM data.
+fn parse_pcm16_mono_wav(wav: &[u8]) -> Result<(u32, Vec<f32>)> {
+    anyhow::ensure!(
+        wav.len() >= 12 && &wav[0..4] == b"RIFF" && &wav[8..12] == b"WAVE",
+        "Invalid RIFF/WAVE file"
+    );
+
+    let mut offset = 12usize;
+    let mut format = None;
+    let mut data_range = None;
+    while offset + 8 <= wav.len() {
+        let id = &wav[offset..offset + 4];
+        let chunk_len = u32::from_le_bytes(wav[offset + 4..offset + 8].try_into()?) as usize;
+        let start = offset + 8;
+        let end = start
+            .checked_add(chunk_len)
+            .context("WAV chunk length overflow")?;
+        anyhow::ensure!(end <= wav.len(), "Truncated WAV chunk");
+
+        if id == b"fmt " {
+            anyhow::ensure!(chunk_len >= 16, "Invalid WAV fmt chunk");
+            format = Some((
+                u16::from_le_bytes(wav[start..start + 2].try_into()?),
+                u16::from_le_bytes(wav[start + 2..start + 4].try_into()?),
+                u32::from_le_bytes(wav[start + 4..start + 8].try_into()?),
+                u16::from_le_bytes(wav[start + 14..start + 16].try_into()?),
+            ));
+        } else if id == b"data" {
+            data_range = Some(start..end);
+        }
+
+        offset = end + (chunk_len & 1);
+    }
+
+    let (audio_format, channels, sample_rate, bits_per_sample) =
+        format.context("WAV fmt chunk not found")?;
+    anyhow::ensure!(audio_format == 1, "Only PCM WAV is supported");
+    anyhow::ensure!(channels == 1, "Only mono WAV is supported");
+    anyhow::ensure!(bits_per_sample == 16, "Only 16-bit WAV is supported");
+    let data = &wav[data_range.context("WAV data chunk not found")?];
+    anyhow::ensure!(data.len().is_multiple_of(2), "WAV PCM data has an odd byte count");
+
+    let samples = data
+        .chunks_exact(2)
+        .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0)
+        .collect();
+    Ok((sample_rate, samples))
 }
 
 /// Run audio dump mode for debugging.
@@ -1300,4 +1238,49 @@ fn write_wav(path: &PathBuf, samples: &[f32], sample_rate: u32) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod wav_tests {
+    use super::parse_pcm16_mono_wav;
+
+    fn push_chunk(wav: &mut Vec<u8>, id: &[u8; 4], data: &[u8]) {
+        wav.extend_from_slice(id);
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            wav.push(0);
+        }
+    }
+
+    #[test]
+    fn wav_parser_finds_data_after_nonstandard_chunks() {
+        let mut wav = Vec::from(&b"RIFF\0\0\0\0WAVE"[..]);
+        push_chunk(&mut wav, b"JUNK", &[1, 2, 3]);
+
+        let mut fmt = Vec::new();
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&1u16.to_le_bytes());
+        fmt.extend_from_slice(&16_000u32.to_le_bytes());
+        fmt.extend_from_slice(&32_000u32.to_le_bytes());
+        fmt.extend_from_slice(&2u16.to_le_bytes());
+        fmt.extend_from_slice(&16u16.to_le_bytes());
+        push_chunk(&mut wav, b"fmt ", &fmt);
+
+        let mut pcm = Vec::new();
+        for sample in [i16::MIN, 0, i16::MAX] {
+            pcm.extend_from_slice(&sample.to_le_bytes());
+        }
+        push_chunk(&mut wav, b"data", &pcm);
+        let riff_len = wav.len() as u32 - 8;
+        wav[4..8].copy_from_slice(&riff_len.to_le_bytes());
+
+        let (rate, samples) = parse_pcm16_mono_wav(&wav).unwrap();
+
+        assert_eq!(rate, 16_000);
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0], -1.0);
+        assert_eq!(samples[1], 0.0);
+        assert!((samples[2] - 32767.0 / 32768.0).abs() < f32::EPSILON);
+    }
 }
