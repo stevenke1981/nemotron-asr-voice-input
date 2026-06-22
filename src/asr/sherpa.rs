@@ -10,6 +10,10 @@ pub struct SherpaAsrEngine {
     language: String,
     initialized: bool,
     sample_rate: i32,
+    /// Track VAD state so it can be re-applied when a new stream is created.
+    vad_enabled: bool,
+    /// VAD threshold (0.0–1.0). Lower = more sensitive to quiet speech.
+    vad_threshold: f32,
 }
 
 impl SherpaAsrEngine {
@@ -21,6 +25,8 @@ impl SherpaAsrEngine {
             language: "zh".into(),
             initialized: false,
             sample_rate: 16000,
+            vad_enabled: false,
+            vad_threshold: 0.1,
         }
     }
 
@@ -109,9 +115,14 @@ impl AsrEngine for SherpaAsrEngine {
 
         // Enable VAD if requested
         if config.use_vad {
+            self.vad_enabled = true;
+            self.vad_threshold = config.vad_threshold;
             if let Some(ref stream) = self.stream {
                 stream.set_option("use_vad", "true");
-                info!("VAD enabled");
+                // Set VAD threshold (lower = more sensitive to quiet speech)
+                let thresh_str = format!("{:.2}", self.vad_threshold);
+                stream.set_option("silero_vad_threshold", &thresh_str);
+                info!("VAD enabled (threshold: {})", thresh_str);
             }
         }
 
@@ -142,8 +153,23 @@ impl AsrEngine for SherpaAsrEngine {
             _ => return Err(AsrError::NotInitialized),
         };
 
-        // Decode
+        // Only decode if enough audio has accumulated. sherpa-onnx's is_ready()
+        // checks the internal feature buffer against the model's minimum frame
+        // requirement (T_ = 65 for Nemotron). This is the official safe alternative
+        // to our manual total_fed >= chunk_target guard, preventing the
+        // "features.cc:GetFrames:188 0 + 65 > 30" assert crash.
+        if !recognizer.is_ready(stream) {
+            return Ok(TranscriptResult::empty());
+        }
+
+        // Decode one step
         recognizer.decode(stream);
+
+        // Check endpoint detection — if triggered, mark result as final.
+        // We do NOT call recognizer.reset() here. Utterance boundaries are
+        // managed externally (via PTT press/release), and reset() creates a
+        // completely new stream to avoid internal state corruption.
+        let is_endpoint = recognizer.is_endpoint(stream);
 
         // Get result
         let result = recognizer.get_result(stream);
@@ -151,14 +177,9 @@ impl AsrEngine for SherpaAsrEngine {
         match result {
             Some(r) => {
                 let text = r.text.clone();
-                let is_final = r.is_final;
+                let is_final = is_endpoint || r.is_final;
 
-                // If endpoint detected, reset for next utterance
-                if is_final && !text.is_empty() {
-                    recognizer.reset(stream);
-                }
-
-                debug!("Transcript: '{}' (final: {})", text, is_final);
+                debug!("Transcript: '{}' (final: {}, endpoint: {})", text, is_final, is_endpoint);
 
                 Ok(TranscriptResult {
                     text,
@@ -167,7 +188,69 @@ impl AsrEngine for SherpaAsrEngine {
                     confidence: 0.0, // sherpa-onnx doesn't provide confidence
                 })
             }
+            None => {
+                if is_endpoint {
+                    // Endpoint detected but no result text — return empty final
+                    Ok(TranscriptResult {
+                        text: String::new(),
+                        is_final: true,
+                        segment_id: 0,
+                        confidence: 0.0,
+                    })
+                } else {
+                    Ok(TranscriptResult::empty())
+                }
+            }
+        }
+    }
+
+    fn is_ready(&self) -> bool {
+        match (&self.recognizer, &self.stream) {
+            (Some(recognizer), Some(stream)) => recognizer.is_ready(stream),
+            _ => false,
+        }
+    }
+
+    fn decode_final(&mut self) -> Result<TranscriptResult, AsrError> {
+        if !self.initialized {
+            return Err(AsrError::NotInitialized);
+        }
+        let (recognizer, stream) = match (&self.recognizer, &self.stream) {
+            (Some(r), Some(s)) => (r, s),
+            _ => return Err(AsrError::NotInitialized),
+        };
+
+        // SAFE: Only get_result() without decode(). After input_finished() and
+        // the main decode loop, calling decode() when !is_ready() can trigger
+        // C++ asserts in sherpa-onnx. We just read the current hypothesis.
+        let result = recognizer.get_result(stream);
+
+        match result {
+            Some(r) => {
+                let text = r.text.clone();
+                let is_final = r.is_final;
+                debug!("Decode final: '{}' (final: {})", text, is_final);
+                Ok(TranscriptResult {
+                    text,
+                    is_final,
+                    segment_id: r.segment.unwrap_or(0) as u32,
+                    confidence: 0.0,
+                })
+            }
             None => Ok(TranscriptResult::empty()),
+        }
+    }
+
+    fn input_finished(&mut self) -> Result<(), AsrError> {
+        if !self.initialized {
+            return Err(AsrError::NotInitialized);
+        }
+        if let Some(ref stream) = self.stream {
+            stream.input_finished();
+            debug!("ASR input_finished signaled");
+            Ok(())
+        } else {
+            Err(AsrError::NotInitialized)
         }
     }
 
@@ -176,9 +259,27 @@ impl AsrEngine for SherpaAsrEngine {
             return Err(AsrError::NotInitialized);
         }
 
-        if let (Some(recognizer), Some(stream)) = (&self.recognizer, &self.stream) {
-            recognizer.reset(stream);
-            info!("ASR engine reset");
+        if let Some(ref recognizer) = self.recognizer {
+            // Create a completely new stream instead of calling recognizer.reset().
+            // The old stream may have stale internal state (partially decoded audio,
+            // endpoint flags, frame buffer pointers) that can corrupt the next
+            // utterance and cause "second utterance can't transcribe" failures.
+            let new_stream = recognizer.create_stream();
+            self.stream = Some(new_stream);
+
+            // Re-apply runtime settings to the fresh stream
+            if let Some(ref new_stream) = self.stream {
+                if self.language != "auto" {
+                    new_stream.set_option("language", &self.language);
+                }
+                if self.vad_enabled {
+                    new_stream.set_option("use_vad", "true");
+                    let thresh_str = format!("{:.2}", self.vad_threshold);
+                    new_stream.set_option("silero_vad_threshold", &thresh_str);
+                }
+            }
+
+            info!("ASR engine reset: new stream created");
             Ok(())
         } else {
             Err(AsrError::NotInitialized)
@@ -205,6 +306,7 @@ impl AsrEngine for SherpaAsrEngine {
             return Err(AsrError::NotInitialized);
         }
 
+        self.vad_enabled = enabled;
         if let Some(ref stream) = self.stream {
             stream.set_option("use_vad", if enabled { "true" } else { "false" });
             info!("VAD runtime toggled: {}", if enabled { "enabled" } else { "disabled" });
@@ -212,6 +314,21 @@ impl AsrEngine for SherpaAsrEngine {
         } else {
             Err(AsrError::NotInitialized)
         }
+    }
+
+    fn set_vad_threshold(&mut self, threshold: f32) -> Result<(), AsrError> {
+        if !self.initialized {
+            return Err(AsrError::NotInitialized);
+        }
+
+        let clamped = threshold.clamp(0.0, 1.0);
+        self.vad_threshold = clamped;
+        let thresh_str = format!("{:.2}", clamped);
+        if let Some(ref stream) = self.stream {
+            stream.set_option("silero_vad_threshold", &thresh_str);
+            info!("VAD threshold updated to: {:.2}", clamped);
+        }
+        Ok(())
     }
 }
 

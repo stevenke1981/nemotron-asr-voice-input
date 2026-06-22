@@ -214,6 +214,13 @@ impl Strings {
         }
     }
 
+    pub fn settings_vad_threshold(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Threshold:",
+            UiLang::Chinese => "閥值：",
+        }
+    }
+
     pub fn settings_injection_section(&self) -> &'static str {
         match self.lang {
             UiLang::English => "Injection Settings",
@@ -331,6 +338,161 @@ impl Strings {
         match self.lang {
             UiLang::English => "Push-to-Talk (hold)",
             UiLang::Chinese => "按住說話（放開即送）",
+        }
+    }
+
+    // ── Main window GUI (egui) ──
+    pub fn status_recording(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Recording",
+            UiLang::Chinese => "錄音中",
+        }
+    }
+
+    pub fn status_idle(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Idle",
+            UiLang::Chinese => "待命中",
+        }
+    }
+
+    pub fn lang_label(&self, lang: &str) -> String {
+        match self.lang {
+            UiLang::English => format!("Lang: {}", lang),
+            UiLang::Chinese => format!("語言：{}", lang),
+        }
+    }
+
+    pub fn convert_label(&self, mode: &str) -> String {
+        match self.lang {
+            UiLang::English => format!("Convert: {}", mode),
+            UiLang::Chinese => format!("轉換：{}", mode),
+        }
+    }
+
+    pub fn hide_overlay(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Hide Overlay",
+            UiLang::Chinese => "隱藏浮窗",
+        }
+    }
+
+    pub fn show_overlay(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Show Overlay",
+            UiLang::Chinese => "顯示浮窗",
+        }
+    }
+
+    pub fn live_transcript(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Live Transcript",
+            UiLang::Chinese => "即時轉錄",
+        }
+    }
+
+    pub fn final_prefix(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Final:",
+            UiLang::Chinese => "最終：",
+        }
+    }
+
+    pub fn partial_prefix(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Partial:",
+            UiLang::Chinese => "即時：",
+        }
+    }
+
+    pub fn history_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "History",
+            UiLang::Chinese => "歷史記錄",
+        }
+    }
+
+    pub fn clear_all(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Clear All",
+            UiLang::Chinese => "清除全部",
+        }
+    }
+
+    pub fn copy_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Copy",
+            UiLang::Chinese => "複製",
+        }
+    }
+
+    pub fn delete_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Del",
+            UiLang::Chinese => "刪除",
+        }
+    }
+
+    pub fn stop_recording_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Stop Recording",
+            UiLang::Chinese => "停止錄音",
+        }
+    }
+
+    pub fn start_recording_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Start Recording",
+            UiLang::Chinese => "開始錄音",
+        }
+    }
+
+    pub fn cycle_language_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Cycle Language",
+            UiLang::Chinese => "切換語言",
+        }
+    }
+
+    pub fn flush_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Flush",
+            UiLang::Chinese => "清除緩衝",
+        }
+    }
+
+    pub fn settings_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Settings",
+            UiLang::Chinese => "設定",
+        }
+    }
+
+    pub fn settings_enabled(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Enabled",
+            UiLang::Chinese => "啟用",
+        }
+    }
+
+    pub fn settings_yes(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Yes",
+            UiLang::Chinese => "是",
+        }
+    }
+
+    pub fn hotkey_display(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Hotkeys (read-only):",
+            UiLang::Chinese => "快捷鍵（唯讀）：",
+        }
+    }
+
+    pub fn theme_label(&self) -> &'static str {
+        match self.lang {
+            UiLang::English => "Theme:",
+            UiLang::Chinese => "主題：",
         }
     }
 

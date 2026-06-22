@@ -13,6 +13,8 @@ pub struct AsrConfig {
     pub chunk_size_ms: u32,
     /// Enable Silero VAD
     pub use_vad: bool,
+    /// Silero VAD threshold (0.0–1.0, default 0.5). Lower = more sensitive.
+    pub vad_threshold: f32,
     /// Language code: "en", "zh", "de", etc. or "auto"
     pub language: String,
     /// Decoding method: "greedy_search" or "modified_beam_search"
@@ -31,6 +33,7 @@ impl Default for AsrConfig {
             num_threads: 4,
             chunk_size_ms: 560,
             use_vad: true,
+            vad_threshold: 0.1,
             language: "zh".into(),
             decoding_method: "greedy_search".into(),
             max_active_paths: 4,

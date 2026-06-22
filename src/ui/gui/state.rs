@@ -33,4 +33,6 @@ pub struct GuiSnapshot {
     pub history: Vec<TranscriptEntry>,
     /// Set by main when tray "Settings" is clicked; consumed by GUI to open settings panel.
     pub show_settings_requested: bool,
+    /// Set when tray Exit or GUI Exit is triggered; consumed by GUI to close the window.
+    pub exit_requested: bool,
 }

@@ -1,10 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
 
 /// Runtime VAD toggle — shared between main thread and audio processing thread.
 /// Updated from settings window at runtime (no restart required).
 pub static RUNTIME_VAD_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Runtime VAD threshold (0.0–1.0, stored as f32 bits via to_bits/from_bits).
+/// Updated from settings window at runtime.
+pub static RUNTIME_VAD_THRESHOLD: AtomicU32 = AtomicU32::new(0.1f32.to_bits());
 
 /// Runtime conversion mode (0=None, 1=S2T, 2=T2S).
 /// Updated from settings window at runtime.
@@ -66,6 +70,8 @@ pub struct AsrProviderConfig {
     pub num_threads: u32,
     /// Enable Silero VAD
     pub use_vad: bool,
+    /// Silero VAD threshold (0.0–1.0, default 0.5). Lower = more sensitive.
+    pub vad_threshold: f32,
     /// Decoding method: "greedy_search" or "modified_beam_search"
     pub decoding_method: String,
     /// Max active paths for beam search
@@ -171,7 +177,7 @@ impl Default for AudioConfig {
             sample_rate: 16000,
             channels: 1,
             chunk_size_ms: 700,
-            ringbuf_capacity: 11200 * 4, // ~2.8 seconds (safe for 700ms chunks)
+            ringbuf_capacity: 11200 * 40, // ~28s @ 16kHz / ~9.3s @ 48kHz — handles ASR CPU latency + high sample rate capture
             device_name: String::new(),
         }
     }
@@ -183,6 +189,7 @@ impl Default for AsrProviderConfig {
             provider: "cpu".into(),
             num_threads: 4,
             use_vad: true,
+            vad_threshold: 0.1,
             decoding_method: "greedy_search".into(),
             max_active_paths: 4,
         }

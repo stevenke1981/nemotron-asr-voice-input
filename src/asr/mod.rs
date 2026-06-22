@@ -17,6 +17,18 @@ pub trait AsrEngine: Send {
     /// Get the current transcript result.
     fn get_transcript(&mut self) -> Result<TranscriptResult, AsrError>;
 
+    /// Check if the engine has enough audio accumulated to decode another step.
+    fn is_ready(&self) -> bool;
+
+    /// Signal that no more audio will be fed (flushes internal buffers).
+    fn input_finished(&mut self) -> Result<(), AsrError>;
+
+    /// Finalize decoding and get the complete result.
+    /// Must be called after input_finished(). Unlike get_transcript(),
+    /// this does NOT check is_ready() first, so it captures the final
+    /// hypothesis that may only be available after all decode steps.
+    fn decode_final(&mut self) -> Result<TranscriptResult, AsrError>;
+
     /// Reset the engine state.
     fn reset(&mut self) -> Result<(), AsrError>;
 
@@ -25,6 +37,9 @@ pub trait AsrEngine: Send {
 
     /// Enable or disable VAD at runtime.
     fn set_vad(&mut self, enabled: bool) -> Result<(), AsrError>;
+
+    /// Update VAD threshold at runtime (0.0–1.0, lower = more sensitive).
+    fn set_vad_threshold(&mut self, threshold: f32) -> Result<(), AsrError>;
 }
 
 /// Result of ASR transcription.

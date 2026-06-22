@@ -25,7 +25,7 @@ use injector::{CompositeInjector, InjectStrategy, TextInjector};
 use asr::{AsrConfig, TranscriptResult};
 use ui::strings::{Strings, UiLang};
 use ui::tray::{TrayAction, TrayManager};
-use ui::gui::app::spawn_gui;
+use ui::gui::app::run_gui;
 use ui::gui::state::{GuiAction, GuiSnapshot, TranscriptEntry};
 
 
@@ -94,6 +94,11 @@ struct AppState {
     ptt_vk: std::sync::Mutex<u32>,
     /// Conversion mode shared across threads.
     conversion_mode: std::sync::Mutex<convert::ConversionMode>,
+    /// Signal the audio processing thread to reset the ASR engine between utterances.
+    engine_reset: AtomicBool,
+    /// Set to true when full-audio (non-streaming) processing completes.
+    /// stop_recording() polls this instead of using a fixed sleep.
+    full_audio_done: AtomicBool,
 }
 
 impl AppState {
@@ -105,6 +110,8 @@ impl AppState {
             is_ptt_mode: AtomicBool::new(false),
             ptt_vk: std::sync::Mutex::new(0),
             conversion_mode: std::sync::Mutex::new(convert::ConversionMode::None),
+            engine_reset: AtomicBool::new(false),
+            full_audio_done: AtomicBool::new(false),
         }
     }
 }
@@ -213,6 +220,7 @@ fn main() -> Result<()> {
         num_threads: app_config.asr.num_threads,
         chunk_size_ms: app_config.audio.chunk_size_ms,
         use_vad: app_config.asr.use_vad,
+        vad_threshold: app_config.asr.vad_threshold,
         language: app_config.language.language.clone(),
         decoding_method: app_config.asr.decoding_method.clone(),
         max_active_paths: app_config.asr.max_active_paths,
@@ -238,7 +246,7 @@ fn main() -> Result<()> {
     let current_language = Arc::new(std::sync::Mutex::new(app_config.language.language.clone()));
 
     // Initialize audio capture
-    let mut audio_capture = AudioCapture::new(
+    let audio_capture = AudioCapture::new(
         &app_config.audio.device_name,
         app_config.audio.sample_rate,
         app_config.audio.channels,
@@ -247,56 +255,15 @@ fn main() -> Result<()> {
 
     // Initialize text injector
     let inject_strategy = InjectStrategy::from_string(&app_config.injector.strategy);
-    let mut injector = CompositeInjector::with_strategy(inject_strategy);
+    let injector = CompositeInjector::with_strategy(inject_strategy);
 
-    // Initialize hotkey manager
-    let mut hotkey_manager = HotkeyManager::new();
-    register_hotkey(
-        &mut hotkey_manager,
-        HotkeyAction::ToggleRecording,
-        app_config.hotkey.toggle_modifiers,
-        app_config.hotkey.toggle_vk,
-    );
-    register_hotkey(
-        &mut hotkey_manager,
-        HotkeyAction::CycleLanguage,
-        app_config.hotkey.lang_modifiers,
-        app_config.hotkey.lang_vk,
-    );
-    register_hotkey(
-        &mut hotkey_manager,
-        HotkeyAction::Flush,
-        app_config.hotkey.flush_modifiers,
-        app_config.hotkey.flush_vk,
-    );
-    register_hotkey(
-        &mut hotkey_manager,
-        HotkeyAction::PushToTalk,
-        app_config.hotkey.ptt_modifiers,
-        app_config.hotkey.ptt_vk,
-    );
-    // Store PTT VK for key-up detection
+    // Store PTT VK for key-up detection (must happen before bg thread starts)
     *state.ptt_vk.lock().unwrap() = app_config.hotkey.ptt_vk;
 
     // Initialize the conversion mode from config (also set runtime static)
     let initial_mode = convert::ConversionMode::from_config(&app_config.conversion.mode);
     *state.conversion_mode.lock().unwrap() = initial_mode;
     config::settings::RUNTIME_CONVERSION_MODE.store(initial_mode.index() as u8, std::sync::atomic::Ordering::SeqCst);
-
-    let toggle_reg = hotkey_manager.actual_key(HotkeyAction::ToggleRecording)
-        .map(|(m, v)| format_hotkey(m, v))
-        .unwrap_or_else(|| format_hotkey(app_config.hotkey.toggle_modifiers, app_config.hotkey.toggle_vk));
-    let lang_reg = hotkey_manager.actual_key(HotkeyAction::CycleLanguage)
-        .map(|(m, v)| format_hotkey(m, v))
-        .unwrap_or_else(|| format_hotkey(app_config.hotkey.lang_modifiers, app_config.hotkey.lang_vk));
-    let flush_reg = hotkey_manager.actual_key(HotkeyAction::Flush)
-        .map(|(m, v)| format_hotkey(m, v))
-        .unwrap_or_else(|| format_hotkey(app_config.hotkey.flush_modifiers, app_config.hotkey.flush_vk));
-    let ptt_reg = hotkey_manager.actual_key(HotkeyAction::PushToTalk)
-        .map(|(m, v)| format_hotkey(m, v))
-        .unwrap_or_else(|| format_hotkey(app_config.hotkey.ptt_modifiers, app_config.hotkey.ptt_vk));
-    info!("Hotkeys registered: ToggleRecording({}), CycleLanguage({}), Flush({}), PushToTalk({})",
-        toggle_reg, lang_reg, flush_reg, ptt_reg);
 
     // Channels
     let (transcript_tx, transcript_rx) = crossbeam::channel::bounded::<TranscriptResult>(64);
@@ -308,22 +275,6 @@ fn main() -> Result<()> {
     ui::tray::set_ui_lang(&app_config.ui.language);
     info!("UI language: {:?}", ui_lang);
 
-    // ── Tray initialization ──────────────────────────────────────────
-    let mut tray_manager = TrayManager::new();
-    if !cli.no_tray {
-        if let Err(e) = tray_manager.initialize(tray_tx.clone()) {
-            warn!("Failed to initialize system tray: {} (continuing without tray)", e);
-        } else {
-            tray_manager.show_notification(
-                ui_strings.app_name(),
-                ui_strings.notification_ready(),
-            );
-        }
-    }
-
-    // Store tray sender for Settings window
-    let _tray_tx_for_settings = tray_tx.clone();
-
     // ── GUI initialization ──────────────────────────────────
     let gui_snapshot = Arc::new(std::sync::Mutex::new(GuiSnapshot {
         is_recording: false,
@@ -333,6 +284,7 @@ fn main() -> Result<()> {
         latest_partial_text: String::new(),
         history: Vec::new(),
         show_settings_requested: false,
+        exit_requested: false,
     }));
 
     let (gui_snapshot_tx, gui_snapshot_rx) = crossbeam::channel::bounded::<GuiSnapshot>(256);
@@ -345,15 +297,7 @@ fn main() -> Result<()> {
     let initial_size = app_config.ui.window_width
         .zip(app_config.ui.window_height)
         .map(|(w, h)| egui::Vec2::new(w, h));
-    let _gui_handle = spawn_gui(
-        gui_snapshot.clone(),
-        gui_snapshot_rx,
-        gui_action_tx.clone(),
-        show_overlay.clone(),
-        initial_pos,
-        initial_size,
-        Some(app_config.ui.theme.clone()),
-    );
+    let gui_theme = app_config.ui.theme.clone();
 
     // ── Audio capture processing thread ──────────────────────────────
     let gui_snapshot_for_audio = gui_snapshot.clone();
@@ -398,7 +342,35 @@ fn main() -> Result<()> {
             let mut resample_buf = vec![0.0f32; chunk_target];
             let mut last_text = String::new();
             let mut last_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
+            let mut last_vad_threshold = f32::from_bits(
+                config::settings::RUNTIME_VAD_THRESHOLD.load(Ordering::SeqCst));
             let mut was_recording = false;
+            // Full-audio buffer: accumulates ALL resampled audio during recording.
+            // On stop, fed to a fresh ASR stream for complete-context decode.
+            let mut full_audio: Vec<f32> = Vec::new();
+
+            // Helper: resample input at capture_rate → target_rate, extend output vec.
+            let mut resample_into = |input: &[f32], output: &mut Vec<f32>| {
+                if capture_sample_rate == target_rate {
+                    output.extend_from_slice(input);
+                    return;
+                }
+                if input.is_empty() { return; }
+                let output_len = resample_buf.len().min(
+                    (input.len() as u64 * target_rate as u64 / capture_sample_rate as u64) as usize,
+                );
+                if output_len == 0 { return; }
+                let ratio = input.len() as f64 / output_len as f64;
+                for i in 0..output_len {
+                    let src = i as f64 * ratio;
+                    let src_i = src.floor() as usize;
+                    let frac = src - src_i as f64;
+                    let a = input[src_i.min(input.len() - 1)] as f64;
+                    let b = input[(src_i + 1).min(input.len() - 1)] as f64;
+                    resample_buf[i] = (a + frac * (b - a)).clamp(-1.0, 1.0) as f32;
+                }
+                output.extend_from_slice(&resample_buf[..output_len]);
+            };
 
             info!(
                 "Audio processing: capture {} Hz → target {} Hz, chunk {} → {} samples",
@@ -408,10 +380,134 @@ fn main() -> Result<()> {
             while audio_state.is_running.load(Ordering::SeqCst) {
                 let is_recording = audio_state.is_recording.load(Ordering::SeqCst);
 
-                // Detect recording start → reset dedup state so each session is clean
+                // ── Recording start ──────────────────────────────────────
                 if is_recording && !was_recording {
                     last_text.clear();
+                    full_audio.clear();
+                    audio_state.full_audio_done.store(false, Ordering::SeqCst);
+                    if audio_state.engine_reset.swap(false, Ordering::SeqCst) {
+                        if let Err(e) = engine.reset() {
+                            tracing::error!("ASR engine reset error: {}", e);
+                        } else {
+                            tracing::debug!("ASR engine reset for new utterance");
+                        }
+                    }
                 }
+
+                // ── Recording stop: process full accumulated audio ───────
+                if !is_recording && was_recording {
+                    // Drain remaining ring buffer into full_audio
+                    loop {
+                        let remaining = audio_ringbuf.len();
+                        if remaining == 0 { break; }
+                        let r = capture_buf.len().min(remaining);
+                        let read = audio_ringbuf.pop_slice(&mut capture_buf[..r]);
+                        if read == 0 { break; }
+                        resample_into(&capture_buf[..read], &mut full_audio);
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    loop {
+                        let remaining = audio_ringbuf.len();
+                        if remaining == 0 { break; }
+                        let r = capture_buf.len().min(remaining);
+                        let read = audio_ringbuf.pop_slice(&mut capture_buf[..r]);
+                        if read == 0 { break; }
+                        resample_into(&capture_buf[..read], &mut full_audio);
+                    }
+
+                    if !full_audio.is_empty() {
+                        // Save utterance audio to voices/ (before silence padding)
+                        if let Err(e) = save_utterance_audio(&full_audio, target_rate) {
+                            tracing::error!("Failed to save utterance audio: {}", e);
+                        }
+
+                        // Temporarily disable VAD for full-audio decode.
+                        // VAD causes the streaming feature extractor to skip
+                        // non-speech frames. The 0.66s silence padding that we add
+                        // below is classified as non-speech by VAD and skipped,
+                        // which means the decoder never sees trailing silence.
+                        // Without trailing silence, the transducer decoder cannot
+                        // finalize the last tokens — the last 1-2 characters are
+                        // silently truncated from the hypothesis.
+                        if asr_config_clone.use_vad {
+                            let _ = engine.set_vad(false);
+                        }
+
+                        // Fresh stream for full-audio decode (complete context)
+                        let _ = engine.reset();
+
+                        // Pad with 0.66s of silence so the decoder can finalize
+                        // trailing characters (streaming ASR needs trailing
+                        // frames to produce the complete hypothesis).
+                        // 0.66s matches the canonical sherpa-onnx Python example
+                        // (online-decode-files.py).
+                        let pad_len = (target_rate as f64 * 0.66) as usize;
+                        full_audio.extend(std::iter::repeat(0.0f32).take(pad_len));
+
+                        if let Err(e) = engine.feed_audio(&full_audio) {
+                            tracing::error!("Full-audio feed error: {}", e);
+                        } else {
+                            let _ = engine.input_finished();
+                            let mut final_text = String::new();
+
+                            // Main decode loop (process all available feature chunks).
+                            // IMPORTANT: Do NOT break on r.is_final! When VAD or endpoint
+                            // detection fires, is_final=true but there are still decoded
+                            // frames that refine the hypothesis. Breaking early would lose
+                            // the last 1-2 characters. Match the canonical sherpa-onnx
+                            // streaming_zipformer.rs pattern: decode until !is_ready().
+                            for _ in 0..60 {
+                                if !engine.is_ready() { break; }
+                                match engine.get_transcript() {
+                                    Ok(r) => {
+                                        if !r.text.is_empty() { final_text = r.text.clone(); }
+                                    }
+                                    Err(e) => { tracing::debug!("Full-audio decode: {}", e); break; }
+                                }
+                            }
+
+                            // decode_final() calls get_result() one more time WITHOUT
+                            // the is_ready() guard, matching the canonical sherpa-onnx
+                            // pattern: decode-loop-then-get_result.
+                            if let Ok(r) = engine.decode_final() {
+                                if !r.text.is_empty() {
+                                    final_text = r.text.clone();
+                                }
+                            }
+
+                            if !final_text.is_empty() && final_text != last_text {
+                                tracing::info!("Full-audio transcript: {}", final_text);
+                                last_text = final_text.clone();
+                                *audio_state.last_transcript.lock().unwrap() = final_text.clone();
+                                let _ = audio_tx.send(TranscriptResult {
+                                    text: final_text.clone(), is_final: true, segment_id: 0, confidence: 0.0,
+                                });
+                                let mut snap = gui_snapshot_for_audio.lock().unwrap();
+                                snap.latest_final_text = final_text.clone();
+                                snap.latest_partial_text.clear();
+                                snap.history.push(TranscriptEntry {
+                                    text: final_text, timestamp: simple_timestamp(),
+                                    language: asr_config_clone.language.clone(),
+                                });
+                                snap.is_recording = false;
+                                let _ = gui_snapshot_tx_for_audio.send(snap.clone());
+                            }
+                        }
+                    }
+
+                    // Restore VAD before creating the next recording's stream.
+                    if asr_config_clone.use_vad {
+                        let _ = engine.set_vad(true);
+                    }
+
+                    // Reset engine for next recording — the stream is in an
+                    // "input_finished" state and cannot accept new audio without
+                    // a fresh stream. Without this, the next utterance crashes
+                    // the C++ decoder.
+                    let _ = engine.reset();
+                    audio_state.full_audio_done.store(true, Ordering::SeqCst);
+                }
+
                 was_recording = is_recording;
 
                 if !is_recording {
@@ -419,6 +515,7 @@ fn main() -> Result<()> {
                     continue;
                 }
 
+                // ── During recording: accumulate + streaming decode ──────
                 let available = audio_ringbuf.len();
                 if available < chunk_capture {
                     std::thread::sleep(Duration::from_millis(20));
@@ -427,38 +524,25 @@ fn main() -> Result<()> {
 
                 let to_read = capture_buf.len().min(available);
                 let read = audio_ringbuf.pop_slice(&mut capture_buf[..to_read]);
-                if read == 0 {
-                    continue;
-                }
+                if read == 0 { continue; }
 
-                // Resample if needed (simple linear interpolation)
-                let feed_data: &[f32] = if capture_sample_rate == target_rate {
-                    &capture_buf[..read]
-                } else {
-                    let input = &capture_buf[..read];
-                    let input_len = input.len();
-                    let output_len = resample_buf.len().min(
-                        (input_len as u64 * target_rate as u64 / capture_sample_rate as u64) as usize,
-                    );
-                    if output_len == 0 { continue; }
-                    let ratio = input_len as f64 / output_len as f64;
-                    for i in 0..output_len {
-                        let src = i as f64 * ratio;
-                        let src_i = src.floor() as usize;
-                        let frac = src - src_i as f64;
-                        let a = input[src_i.min(input_len - 1)] as f64;
-                        let b = input[(src_i + 1).min(input_len - 1)] as f64;
-                        resample_buf[i] = (a + frac * (b - a)) as f32;
-                        resample_buf[i] = resample_buf[i].clamp(-1.0, 1.0);
-                    }
-                    &resample_buf[..output_len]
-                };
+                // Resample and accumulate into full_audio
+                let input_slice = &capture_buf[..read];
+                let pre_len = full_audio.len();
+                resample_into(input_slice, &mut full_audio);
+                let feed_data = &full_audio[pre_len..];
 
-                // Check for runtime VAD toggle
+                // Runtime VAD toggle + threshold
                 let current_vad = config::settings::RUNTIME_VAD_ENABLED.load(Ordering::SeqCst);
                 if current_vad != last_vad {
                     last_vad = current_vad;
                     let _ = engine.set_vad(current_vad);
+                }
+                let current_threshold = f32::from_bits(
+                    config::settings::RUNTIME_VAD_THRESHOLD.load(Ordering::SeqCst));
+                if (current_threshold - last_vad_threshold).abs() > 0.001 {
+                    last_vad_threshold = current_threshold;
+                    let _ = engine.set_vad_threshold(current_threshold);
                 }
 
                 if let Err(e) = engine.feed_audio(feed_data) {
@@ -466,29 +550,21 @@ fn main() -> Result<()> {
                     continue;
                 }
 
+                // Streaming decode (real-time partial results)
                 match engine.get_transcript() {
                     Ok(result) => {
                         if !result.text.is_empty() && (result.is_final || result.text != last_text) {
-                            // Only update last_text for NEW partial text (not for is_final
-                            // duplicates, so the next utterance can still send its first partial)
-                            if result.text != last_text {
-                                last_text = result.text.clone();
-                            }
-                            // Update shared last_transcript for injection on stop
+                            if result.text != last_text { last_text = result.text.clone(); }
                             *audio_state.last_transcript.lock().unwrap() = result.text.clone();
-                            // Send snapshot to GUI (before moving result)
                             let result_clone = result.clone();
-                            if audio_tx.send(result).is_err() {
-                                break;
-                            }
+                            if audio_tx.send(result).is_err() { break; }
                             let mut snap = gui_snapshot_for_audio.lock().unwrap();
                             let trimmed = result_clone.text.trim().to_string();
                             if result_clone.is_final {
                                 snap.latest_final_text = trimmed.clone();
                                 snap.latest_partial_text.clear();
                                 snap.history.push(TranscriptEntry {
-                                    text: trimmed,
-                                    timestamp: simple_timestamp(),
+                                    text: trimmed, timestamp: simple_timestamp(),
                                     language: asr_config_clone.language.clone(),
                                 });
                             } else {
@@ -498,9 +574,7 @@ fn main() -> Result<()> {
                             let _ = gui_snapshot_tx_for_audio.send(snap.clone());
                         }
                     }
-                    Err(e) => {
-                        tracing::debug!("ASR transcript error: {}", e);
-                    }
+                    Err(e) => tracing::debug!("ASR transcript error: {}", e),
                 }
             }
 
@@ -535,18 +609,149 @@ fn main() -> Result<()> {
         info!("Chinese text converter initialized");
     }
 
+    // Shared running flag for GUI <-> background thread coordination.
+    // This shadows `state.is_running` (used by audio/watchdog threads);
+    // both are set to false on exit.
+    let running_flag = Arc::new(AtomicBool::new(true));
+
+    // ── Spawn Win32 message loop on background thread ─────────────────
+    let bg_flag = running_flag.clone();
+    let bg_state = state.clone();
+    let bg_gui_snapshot = gui_snapshot.clone();
+    let bg_gui_snapshot_tx = gui_snapshot_tx.clone();
+    let bg_show_overlay = show_overlay.clone();
+    let bg_language_list = language_list.clone();
+    let bg_current_language = current_language.clone();
+
+    let bg_config_path = cli.config.clone();
+    let bg_tray_tx = tray_tx.clone();
+    let _bg_handle = std::thread::Builder::new()
+        .name("win32-main-loop".into())
+        .spawn(move || {
+            win32_background_loop(
+                bg_flag,
+                bg_state,
+                audio_capture,
+                injector,
+                transcript_rx,
+                tray_rx,
+                gui_action_rx,
+                bg_gui_snapshot,
+                bg_gui_snapshot_tx,
+                bg_show_overlay,
+                bg_language_list,
+                bg_current_language,
+                cli.no_tray,
+                bg_tray_tx,
+                ui_strings,
+                bg_config_path,
+                // hotkey config
+                app_config.hotkey.toggle_modifiers,
+                app_config.hotkey.toggle_vk,
+                app_config.hotkey.lang_modifiers,
+                app_config.hotkey.lang_vk,
+                app_config.hotkey.flush_modifiers,
+                app_config.hotkey.flush_vk,
+                app_config.hotkey.ptt_modifiers,
+                app_config.hotkey.ptt_vk,
+            );
+        })
+        .context("Failed to spawn Win32 background thread")?;
+
+    // ── Run GUI on main thread (blocking until window closes) ─────
+    run_gui(
+        gui_snapshot,
+        gui_snapshot_rx,
+        gui_action_tx,
+        show_overlay,
+        running_flag.clone(),
+        initial_pos,
+        initial_size,
+        Some(gui_theme),
+        ui_lang,
+    );
+
+    // ── GUI window closed → signal shutdown, wait for bg thread ───
+    info!("GUI window closed — shutting down background threads...");
+    state.is_running.store(false, Ordering::SeqCst);
+    running_flag.store(false, Ordering::SeqCst);
+    // bg_handle will rejoin shortly (running_flag already false, or bg thread already exited)
+
+    info!("Nemotron Voice Input stopped.");
+    Ok(())
+}
+
+/// Win32 message pump running on a background thread.
+///
+/// Handles hotkeys, tray messages, transcript injection, GUI actions,
+/// and PTT key-up monitoring. Exits when `running_flag` becomes false.
+fn win32_background_loop(
+    running_flag: Arc<AtomicBool>,
+    state: Arc<AppState>,
+    mut audio_capture: AudioCapture,
+    mut injector: CompositeInjector,
+    transcript_rx: crossbeam::channel::Receiver<TranscriptResult>,
+    tray_rx: crossbeam::channel::Receiver<TrayAction>,
+    gui_action_rx: crossbeam::channel::Receiver<GuiAction>,
+    gui_snapshot: Arc<std::sync::Mutex<GuiSnapshot>>,
+    gui_snapshot_tx: crossbeam::channel::Sender<GuiSnapshot>,
+    show_overlay: Arc<AtomicBool>,
+    language_list: Arc<Vec<String>>,
+    current_language: Arc<std::sync::Mutex<String>>,
+    no_tray: bool,
+    tray_tx: crossbeam::channel::Sender<TrayAction>,
+    ui_strings: Strings,
+    config_path: PathBuf,
+    // Hotkey configuration
+    toggle_modifiers: u32,
+    toggle_vk: u32,
+    lang_modifiers: u32,
+    lang_vk: u32,
+    flush_modifiers: u32,
+    flush_vk: u32,
+    ptt_modifiers: u32,
+    ptt_vk: u32,
+) {
+    // ── Initialize Win32 resources on this thread ─────────────────────
+    let mut hotkey_manager = HotkeyManager::new();
+    register_hotkey(&mut hotkey_manager, HotkeyAction::ToggleRecording, toggle_modifiers, toggle_vk);
+    register_hotkey(&mut hotkey_manager, HotkeyAction::CycleLanguage, lang_modifiers, lang_vk);
+    register_hotkey(&mut hotkey_manager, HotkeyAction::Flush, flush_modifiers, flush_vk);
+    register_hotkey(&mut hotkey_manager, HotkeyAction::PushToTalk, ptt_modifiers, ptt_vk);
+    let toggle_reg = hotkey_manager.actual_key(HotkeyAction::ToggleRecording)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(toggle_modifiers, toggle_vk));
+    let ptt_reg = hotkey_manager.actual_key(HotkeyAction::PushToTalk)
+        .map(|(m, v)| format_hotkey(m, v))
+        .unwrap_or_else(|| format_hotkey(ptt_modifiers, ptt_vk));
+    info!("Hotkeys registered: ToggleRecording({}), PushToTalk({})", toggle_reg, ptt_reg);
+
+    let tray_manager: TrayManager;
+    if !no_tray {
+        let mut tm = TrayManager::new();
+        if let Err(e) = tm.initialize(tray_tx) {
+            warn!("Failed to initialize system tray: {} (continuing without tray)", e);
+            tray_manager = TrayManager::new();
+        } else {
+            tm.show_notification(ui_strings.app_name(), ui_strings.notification_ready());
+            tray_manager = tm;
+        }
+    } else {
+        tray_manager = TrayManager::new();
+    }
+
     info!(
-        "Ready. Press {} to start/stop recording, {} for push-to-talk. Language: {}",
-        toggle_reg, ptt_reg, app_config.language.language
+        "Ready. Press {} to start/stop recording, {} for push-to-talk.",
+        toggle_reg, ptt_reg
     );
 
     let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
 
     unsafe {
-        while state.is_running.load(Ordering::SeqCst) {
+        while running_flag.load(Ordering::SeqCst) {
             let has_message = windows::Win32::UI::WindowsAndMessaging::PeekMessageA(
                 &mut msg,
-                None, // get messages for all windows owned by this thread
+                None,
                 0,
                 0,
                 windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
@@ -554,7 +759,7 @@ fn main() -> Result<()> {
 
             if has_message.as_bool() {
                 if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
-                    state.is_running.store(false, Ordering::SeqCst);
+                    running_flag.store(false, Ordering::SeqCst);
                     break;
                 }
 
@@ -579,7 +784,6 @@ fn main() -> Result<()> {
                     let vk = *state.ptt_vk.lock().unwrap();
                     let key_down = windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk as i32) < 0;
                     if !key_down {
-                        // Key released — stop recording + inject
                         state.is_ptt_mode.store(false, Ordering::SeqCst);
                         stop_recording(&state, &mut audio_capture, &mut injector, &tray_manager);
                     }
@@ -595,7 +799,6 @@ fn main() -> Result<()> {
                             {
                                 info!("Transcript: {}", result.text);
                                 if result.is_final {
-                                    // Apply conversion mode (read runtime static for live updates)
                                     let mode = config::settings::runtime_conversion_mode();
                                     let text = convert::convert_text(&result.text, mode);
                                     if let Err(e) = injector.inject_text(&text) {
@@ -620,11 +823,7 @@ fn main() -> Result<()> {
                             }
                         }
                         TrayAction::CycleLanguage => {
-                            cycle_language(
-                                &language_list,
-                                &current_language,
-                                &tray_manager,
-                            );
+                            cycle_language(&language_list, &current_language, &tray_manager);
                         }
                         TrayAction::Flush => {
                             info!("Tray: Flush");
@@ -648,11 +847,20 @@ fn main() -> Result<()> {
                             let show = !show_overlay.load(Ordering::SeqCst);
                             show_overlay.store(show, Ordering::SeqCst);
                             info!("Tray: Toggling overlay: {}", show);
-                            let _ = gui_action_tx.send(GuiAction::ShowOverlay(show));
+                            // Forward to GUI (action_tx), but this bg thread only has gui_action_rx.
+                            // The overlay state is passed via show_overlay AtomicBool, so
+                            // GuiApp::update will pick it up from GuiSharedState.
                         }
                         TrayAction::Exit => {
                             info!("Tray: Exit requested");
+                            // Signal all threads
                             state.is_running.store(false, Ordering::SeqCst);
+                            running_flag.store(false, Ordering::SeqCst);
+                            // Tell the GUI to close via snapshot
+                            if let Ok(mut snap) = gui_snapshot.lock() {
+                                snap.exit_requested = true;
+                            }
+                            let _ = gui_snapshot_tx.send(gui_snapshot.lock().unwrap().clone());
                             break;
                         }
                     }
@@ -680,32 +888,28 @@ fn main() -> Result<()> {
                         }
                         GuiAction::SaveConfig(cfg) => {
                             info!("GUI: Saving config");
-                            if let Err(e) = cfg.save(&cli.config) {
+                            if let Err(e) = cfg.save(&config_path) {
                                 error!("Failed to save config: {}", e);
                             } else {
                                 // Update runtime settings
                                 *current_language.lock().unwrap() = cfg.language.language.clone();
                                 config::settings::RUNTIME_VAD_ENABLED.store(cfg.asr.use_vad, Ordering::SeqCst);
+                                config::settings::RUNTIME_VAD_THRESHOLD.store(
+                                    cfg.asr.vad_threshold.to_bits(), Ordering::SeqCst);
                                 config::settings::RUNTIME_CONVERSION_MODE.store(
                                     convert::ConversionMode::from_config(&cfg.conversion.mode).index() as u8,
                                     Ordering::SeqCst,
                                 );
                                 *state.conversion_mode.lock().unwrap() = convert::ConversionMode::from_config(&cfg.conversion.mode);
-                                // Update GUI snapshot
-                                let _snap = gui_snapshot.lock().unwrap();
-                                // snapshot fields are read-only for now
                                 info!("Config saved and runtime settings updated");
                             }
                         }
-                        GuiAction::ShowOverlay(show) => {
-                            info!("GUI: Overlay toggled: {}", show);
+                        GuiAction::ShowOverlay(_show) => {
+                            info!("GUI: Overlay toggled");
                         }
-                        GuiAction::DeleteHistoryEntry(idx) => {
-                            let snap = gui_snapshot.lock().unwrap();
-                            if idx < snap.history.len() {
-                                // Can't remove from locked snapshot easily;
-                                // this will be handled properly in Phase 2
-                            }
+                        GuiAction::DeleteHistoryEntry(_idx) => {
+                            let _snap = gui_snapshot.lock().unwrap();
+                            // history deletion handled on the GUI side
                         }
                         GuiAction::ClearHistory => {
                             gui_snapshot.lock().unwrap().history.clear();
@@ -713,6 +917,11 @@ fn main() -> Result<()> {
                         GuiAction::Exit => {
                             info!("GUI: Exit requested");
                             state.is_running.store(false, Ordering::SeqCst);
+                            running_flag.store(false, Ordering::SeqCst);
+                            if let Ok(mut snap) = gui_snapshot.lock() {
+                                snap.exit_requested = true;
+                            }
+                            let _ = gui_snapshot_tx.send(gui_snapshot.lock().unwrap().clone());
                             break;
                         }
                     }
@@ -724,12 +933,8 @@ fn main() -> Result<()> {
     }
 
     // Cleanup
-    info!("Shutting down...");
-    state.is_running.store(false, Ordering::SeqCst);
     let _ = audio_capture.stop();
-
-    info!("Nemotron Voice Input stopped.");
-    Ok(())
+    info!("Win32 background loop exited");
 }
 
 /// Register a hotkey with error handling.
@@ -784,6 +989,8 @@ fn start_recording(
 ) {
     audio_capture.clear_ringbuf();
     *state.last_transcript.lock().unwrap() = String::new();
+    // Signal the audio processing thread to reset the ASR decoder state
+    state.engine_reset.store(true, Ordering::SeqCst);
 
     if let Err(e) = audio_capture.start() {
         error!("Failed to start recording: {}", e);
@@ -805,14 +1012,32 @@ fn stop_recording(
     injector: &mut CompositeInjector,
     tray: &TrayManager,
 ) {
-    state.is_recording.store(false, Ordering::SeqCst);
+    // CRITICAL: Stop audio capture FIRST before signaling the audio thread.
+    // If we set is_recording=false first, the audio thread starts draining
+    // the ring buffer while the cpal callback may still be pushing data,
+    // causing the last ~50-100ms of audio to be truncated.
     if let Err(e) = audio_capture.stop() {
         error!("Failed to stop recording: {}", e);
         tray.show_notification("Error", &format!("Failed to stop recording: {}", e));
     }
+
+    // Small sleep to let any in-flight callback data reach the ring buffer
+    // before the audio thread drains it.
+    std::thread::sleep(Duration::from_millis(10));
+
+    state.is_recording.store(false, Ordering::SeqCst);
     tray.set_recording_state(false);
 
-    // Inject the last non-empty transcript (for results that weren't final)
+    // Wait for the audio processing thread to finish full-audio decode.
+    // Poll full_audio_done flag with 100ms intervals (up to 10 seconds).
+    for _ in 0..100 {
+        if state.full_audio_done.load(Ordering::SeqCst) { break; }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // Small extra wait for async injection to propagate
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Inject the last non-empty transcript
     let text = state.last_transcript.lock().unwrap().clone();
     if !text.is_empty() {
         let mode = config::settings::runtime_conversion_mode();
@@ -978,6 +1203,65 @@ fn run_audio_dump(dump_path: &PathBuf, app_config: &AppConfig) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Save utterance audio to the `voices/` directory with a timestamp filename.
+fn save_utterance_audio(samples: &[f32], sample_rate: u32) -> Result<()> {
+    let voices_dir = PathBuf::from("voices");
+    if !voices_dir.exists() {
+        std::fs::create_dir_all(&voices_dir)?;
+    }
+
+    // Generate a filename: voices/YYYYMMDD-HHMMSS-uuuuuu.wav
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let total_secs = now.as_secs();
+    let micros = now.subsec_micros();
+
+    // Break down into date/time components
+    let secs_per_day: u64 = 86400;
+    let days_since_epoch = total_secs / secs_per_day;
+    let time_secs = total_secs % secs_per_day;
+
+    let hours = time_secs / 3600;
+    let mins = (time_secs % 3600) / 60;
+    let secs = time_secs % 60;
+
+    // Simple day count → year/month/day (approximate, fine for filenames)
+    let (year, month, day) = days_since_epoch_to_date(days_since_epoch);
+
+    let filename = format!(
+        "{:04}{:02}{:02}-{:02}{:02}{:02}-{:06}.wav",
+        year, month, day, hours, mins, secs, micros
+    );
+    let path = voices_dir.join(&filename);
+
+    write_wav(&path, samples, sample_rate)?;
+
+    info!("Saved utterance audio ({} samples, {:.1}s) to {:?}",
+        samples.len(),
+        samples.len() as f64 / sample_rate as f64,
+        path);
+
+    Ok(())
+}
+
+/// Convert days since Unix epoch to a (year, month, day) tuple.
+/// Uses a simple algorithm valid for dates 1970-03-01 to 2100-02-28.
+fn days_since_epoch_to_date(days: u64) -> (u64, u64, u64) {
+    // Days since 1970-01-01. Shift so March is month 0 (year starts March).
+    let z = days + 719468;  // days from 0000-03-01 to 1970-01-01
+    let era = z / 146097;   // 146097 days per 400-year era
+    let doe = z % 146097;   // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// Write a WAV file from f32 PCM data.

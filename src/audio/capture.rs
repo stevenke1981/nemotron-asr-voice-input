@@ -147,11 +147,12 @@ impl AudioCapture {
             }
         };
 
+        // Signal the callback before play() so the first chunk isn't discarded.
+        self.is_capturing.store(true, Ordering::SeqCst);
         stream.play().context("Failed to start audio stream")?;
         self.stream = Some(stream);
         self.capture_sample_rate = actual_rate;
         self.channels = actual_channels;
-        self.is_capturing.store(true, Ordering::SeqCst);
         info!(
             "Audio capture started ({} Hz, {} ch, target {} Hz)",
             actual_rate, actual_channels, self.sample_rate
@@ -165,10 +166,16 @@ impl AudioCapture {
             return Ok(());
         }
 
-        self.is_capturing.store(false, Ordering::SeqCst);
+        // CRITICAL: Drop the stream FIRST. This blocks until the current
+        // cpal callback finishes. The callback still sees is_capturing=true
+        // and pushes its data to the ring buffer. After drop() returns, no
+        // more callbacks will fire.
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }
+
+        // Only now mark as stopped — no more callbacks can run.
+        self.is_capturing.store(false, Ordering::SeqCst);
         info!("Audio capture stopped");
         Ok(())
     }
