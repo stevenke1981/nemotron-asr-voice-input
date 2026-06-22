@@ -43,3 +43,18 @@
 **Trigger:** sherpa-onnx C++ assertion crash `features.cc:GetFrames:188 0 + 65 > 55` on first recording hotkey press — model metadata T_=65 frames (650ms) but chunk_size_ms=560ms only provides 56 frames.
 **Rule:** When feeding audio to sherpa-onnx streaming transducer models, ensure `chunk_size_ms` provides enough frames for the model's `T_` (total receptive field) metadata value plus snip_edges overhead. For zipformer2 models: `T_` = model metadata `"T"` in frames (10ms each), and snip_edges=true adds ~25ms frame_length overhead. Formula: `chunk_ms >= (T_ * 10 + 25) * 1000 / 16000`. For Nemotron (T_=65): chunk_ms >= 675, round up to 700. Before changing, check model metadata by running with `config_.debug = true` to see `T_` and `decode_chunk_len_` values.
 **Source:** fix: increase chunk_size_ms from 560 to 700 to prevent sherpa-onnx crash
+---
+## Lesson #10 — 2026-06-22
+**Trigger:** PTT mode crash (Ctrl+Shift+L 閃退) — sherpa-onnx assert `features.cc:GetFrames:188 0 + 65 > 30` when calling `decode()` multiple times on audio shorter than one model chunk.
+**Rule:** Never call sherpa-onnx `recognizer.decode()` or `recognizer.get_result()` more than once on the same stream data without feeding new audio first. The internal feature buffer expects at least `T_` frames (65 for Nemotron, ~650ms) of audio per decode operation. Calling decode multiple times on short audio (< one chunk) will assert-crash because the frame computation `offset + requested > available` (e.g., `0 + 65 > 30`) fails. If multiple decode passes are needed, either (a) accumulate enough audio first, or (b) feed the same audio again via `accept_waveform` before each decode, or (c) use endpoint detection instead.
+**Source:** fix: remove multi-cycle decode loop to prevent PTT crash
+---
+## Lesson #11 — 2026-06-22
+**Trigger:** Second utterance fails to transcribe (silent failure) after `recognizer.reset(stream)` between PTT utterances.
+**Rule:** `recognizer.reset(&stream)` in sherpa-onnx does NOT fully clear the stream's internal state. Stale frame buffers, endpoint detection flags, and feature extraction state leak into the next utterance. Instead of calling `reset()`, ALWAYS call `recognizer.create_stream()` and replace the old stream. This gives a completely fresh processing context. Re-apply runtime settings (language, VAD) to the new stream after creation. This is also the pattern used in sherpa-onnx's official microphone examples.
+**Source:** fix: complete ASR engine rewrite — create_stream on reset, is_ready guard, remove total_fed
+---
+## Lesson #12 — 2026-06-22
+**Trigger:** Manual `total_fed >= chunk_target` guard was fragile — didn't account for resampling, different model T_ values, or the exact internal frame buffer state.
+**Rule:** Use `recognizer.is_ready(&stream)` instead of manually tracking samples fed. This is the official sherpa-onnx API that checks the internal feature frame buffer against the model's `T_` minimum. It works correctly regardless of sample rate, chunk size, or resampling. The official example (`streaming_zipformer.rs`) uses this pattern: `while recognizer.is_ready(&stream) { recognizer.decode(&stream); ... }`.
+**Source:** fix: replace total_fed guard with recognizer.is_ready()
