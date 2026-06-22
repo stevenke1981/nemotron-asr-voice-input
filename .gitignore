@@ -16,3 +16,7 @@ Thumbs.db
 *~
 config.toml
 models/
+
+# Agent workflow files (local tooling, not app source)
+.opencode/
+docs/
