@@ -1,6 +1,0 @@
-[package]
-name = "test-cc"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-ferrous-opencc = "0.4"

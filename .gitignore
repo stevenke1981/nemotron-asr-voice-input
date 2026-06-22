@@ -20,3 +20,7 @@ models/
 # Agent workflow files (local tooling, not app source)
 .opencode/
 docs/
+
+# Test/debug artifacts
+test_cc/
+test_converter.rs
