@@ -28,6 +28,7 @@ impl ConversionMode {
     }
 
     /// Serialize to a config string.
+    #[allow(dead_code)]
     pub fn to_config(&self) -> &'static str {
         match self {
             Self::None => "none",

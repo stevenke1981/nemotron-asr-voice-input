@@ -161,7 +161,7 @@ impl Default for AppConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
-            language: "en".into(),
+            language: "zh-TW".into(),
             theme: "Dark".into(),
             window_x: None,
             window_y: None,

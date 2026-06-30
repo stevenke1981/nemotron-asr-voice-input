@@ -43,21 +43,23 @@ pub enum TrayAction {
 static TRAY_TX: OnceLock<crossbeam::channel::Sender<TrayAction>> = OnceLock::new();
 
 /// UI language for tray context menu (set from config).
-static UI_LANG: AtomicU8 = AtomicU8::new(0);
+static UI_LANG: AtomicU8 = AtomicU8::new(2); // default: zh-TW
 
 /// Set the UI language for the tray context menu.
 pub fn set_ui_lang(code: &str) {
     match code {
-        "zh" => UI_LANG.store(1, Ordering::Relaxed),
-        _ => UI_LANG.store(0, Ordering::Relaxed),
+        "en" => UI_LANG.store(0, Ordering::Relaxed),
+        "zh-CN" | "zh_Hans" | "hans" => UI_LANG.store(1, Ordering::Relaxed),
+        _ => UI_LANG.store(2, Ordering::Relaxed), // zh-TW / zh fallback
     }
 }
 
 /// Get the current UI strings for the tray.
 pub fn tray_strings() -> Strings {
     let lang = match UI_LANG.load(Ordering::Relaxed) {
-        1 => UiLang::Chinese,
-        _ => UiLang::English,
+        0 => UiLang::English,
+        1 => UiLang::ChineseSimplified,
+        _ => UiLang::ChineseTraditional,
     };
     Strings::new(lang)
 }
@@ -75,6 +77,7 @@ pub fn set_tray_sender(tx: crossbeam::channel::Sender<TrayAction>) -> Result<(),
 }
 
 /// Send a balloon notification from anywhere (used by config window).
+#[allow(dead_code)]
 pub fn send_tray_notification(title: &str, message: &str) {
     let hwnd = HIDDEN_HWND.load(Ordering::Relaxed);
     if hwnd == 0 {
@@ -452,6 +455,7 @@ impl TrayManager {
     }
 
     /// Return the HWND of the hidden window.
+    #[allow(dead_code)]
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }

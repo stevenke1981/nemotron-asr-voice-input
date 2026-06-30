@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 
 /// Actions sent from the egui GUI back to the main Win32 thread.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum GuiAction {
     ToggleRecording,
     CycleLanguage,
@@ -19,6 +20,7 @@ pub enum GuiAction {
 pub struct TranscriptEntry {
     pub text: String,
     pub timestamp: String,
+    #[allow(dead_code)]
     pub language: String,
 }
 
