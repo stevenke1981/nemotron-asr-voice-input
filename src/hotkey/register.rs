@@ -210,3 +210,61 @@ pub fn format_hotkey(modifiers: u32, vk: u32) -> String {
 
     parts.join("+")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_hotkey_all_modifiers() {
+        // Ctrl(2) | Alt(1) | Shift(4) | Win(8) = 0x0F
+        let s = format_hotkey(0x000F, 0x70); // F1
+        assert!(s.contains("Ctrl"));
+        assert!(s.contains("Alt"));
+        assert!(s.contains("Shift"));
+        assert!(s.contains("Win"));
+        assert!(s.contains("F1"));
+    }
+
+    #[test]
+    fn test_format_hotkey_letter_key() {
+        let s = format_hotkey(0x0002, 0x41); // Ctrl+A
+        assert_eq!(s, "Ctrl+A");
+    }
+
+    #[test]
+    fn test_format_hotkey_digit_key() {
+        let s = format_hotkey(0x0003, 0x31); // Ctrl+Alt+1
+        assert_eq!(s, "Ctrl+Alt+1");
+    }
+
+    #[test]
+    fn test_format_hotkey_special_keys() {
+        // MOD_ALT(1) + Space(0x20)
+        assert_eq!(format_hotkey(0x0001, 0x20), "Alt+Space");
+        assert_eq!(format_hotkey(0x0002, 0x0D), "Ctrl+Enter");
+        assert_eq!(format_hotkey(0x0004, 0x1B), "Shift+Escape");
+        assert_eq!(format_hotkey(0x0008, 0x09), "Win+Tab");
+        assert_eq!(format_hotkey(0x0003, 0x08), "Ctrl+Alt+Backspace");
+    }
+
+    #[test]
+    fn test_format_hotkey_function_keys() {
+        assert_eq!(format_hotkey(0, 0x70), "F1");
+        assert_eq!(format_hotkey(0, 0x7B), "F12");
+    }
+
+    #[test]
+    fn test_format_hotkey_unknown_vk_shows_hex() {
+        let s = format_hotkey(0, 0xFF);
+        assert!(s.contains("VK=0xFF"));
+    }
+
+    #[test]
+    fn test_hotkey_action_id_consistency() {
+        assert_eq!(HotkeyAction::ToggleRecording.id(), 1);
+        assert_eq!(HotkeyAction::CycleLanguage.id(), 2);
+        assert_eq!(HotkeyAction::Flush.id(), 3);
+        assert_eq!(HotkeyAction::PushToTalk.id(), 4);
+    }
+}

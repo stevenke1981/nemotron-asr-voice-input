@@ -36,3 +36,24 @@ pub struct GuiSnapshot {
     /// Set when tray Exit or GUI Exit is triggered; consumed by GUI to close the window.
     pub exit_requested: bool,
 }
+
+/// Status of the model check/download phase during startup.
+#[derive(Debug, Clone)]
+pub enum ModelStatus {
+    /// Checking if model files already exist.
+    Checking,
+    /// Downloading: (current_bytes, total_bytes_estimate).
+    Downloading(u64, u64),
+    /// Extracting model package.
+    Extracting,
+    /// Download failed with an error message.
+    Failed(String),
+    /// Models are ready — normal UI can be shown.
+    Ready,
+}
+
+impl Default for ModelStatus {
+    fn default() -> Self {
+        Self::Checking
+    }
+}

@@ -2,7 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use super::state::{GuiAction, GuiSnapshot};
+use super::state::{GuiAction, GuiSnapshot, ModelStatus};
+use crate::config::AppConfig;
 use crate::ui::strings::{Strings, UiLang};
 
 /// List of common Chinese font paths on Windows, in priority order.
@@ -47,6 +48,8 @@ pub struct GuiSharedState {
     pub show_overlay: Arc<AtomicBool>,
     /// Set to false to signal the GUI to close (e.g., tray Exit).
     pub is_running: Arc<AtomicBool>,
+    /// Model download status shown during startup.
+    pub model_status: Arc<Mutex<ModelStatus>>,
 }
 
 pub struct GuiApp {
@@ -54,6 +57,8 @@ pub struct GuiApp {
     current_snapshot: GuiSnapshot,
     show_settings: bool,
     show_overlay_local: bool,
+    /// Whether we have already switched to normal UI (after model ready).
+    model_ready: bool,
     // Settings state
     settings_language: String,
     settings_provider: String,
@@ -74,32 +79,66 @@ pub struct GuiApp {
     window_h: f32,
     /// Bilingual UI strings.
     ui_strings: Strings,
+    /// Snapshot of the current AppConfig for preserving non-GUI fields on save.
+    base_config: Option<AppConfig>,
 }
 
 impl GuiApp {
-    pub fn new(state: GuiSharedState, initial_pos: Option<egui::Pos2>, initial_size: Option<egui::Vec2>, initial_theme: Option<String>, initial_lang: UiLang) -> Self {
+    pub fn new(state: GuiSharedState, initial_pos: Option<egui::Pos2>, initial_size: Option<egui::Vec2>, initial_theme: Option<String>, initial_lang: UiLang, initial_config: Option<&AppConfig>) -> Self {
         let (wx, wy) = initial_pos.map(|p| (p.x, p.y)).unwrap_or((100.0, 100.0));
         let (ww, wh) = initial_size.map(|s| (s.x, s.y)).unwrap_or((800.0, 600.0));
         let theme = initial_theme.unwrap_or_else(|| "Dark".into());
+
+        // Load settings fields from the current AppConfig so the settings
+        // window reflects actual runtime values instead of hardcoded defaults.
+        let (settings_language, settings_provider, settings_num_threads,
+             settings_use_vad, settings_vad_threshold, settings_decoding_method,
+             settings_inject_strategy, settings_key_delay_ms, settings_restore_clipboard,
+             settings_conversion_mode, settings_ui_lang) = match initial_config {
+            Some(cfg) => (
+                cfg.language.language.clone(),
+                cfg.asr.provider.clone(),
+                cfg.asr.num_threads,
+                cfg.asr.use_vad,
+                cfg.asr.vad_threshold,
+                cfg.asr.decoding_method.clone(),
+                cfg.injector.strategy.clone(),
+                cfg.injector.key_delay_ms,
+                cfg.injector.restore_clipboard,
+                cfg.conversion.mode.clone(),
+                cfg.ui.language.clone(),
+            ),
+            None => (
+                "zh".into(), "cpu".into(), 4, true, 0.1,
+                "greedy_search".into(), "auto".into(), 5, true,
+                "s2t".into(),
+                match initial_lang {
+                    UiLang::English => "en",
+                    UiLang::Chinese => "zh",
+                }.to_string(),
+            ),
+        };
+
+        let model_ready = matches!(*state.model_status.lock().unwrap(), ModelStatus::Ready);
+
         Self {
             state,
             current_snapshot: GuiSnapshot::default(),
+            base_config: initial_config.cloned(),
             show_settings: false,
             show_overlay_local: false,
-            settings_language: "zh".into(),
-            settings_provider: "cpu".into(),
-            settings_num_threads: 4,
-            settings_use_vad: true,
-            settings_vad_threshold: 0.1,
-            settings_decoding_method: "greedy_search".into(),
-            settings_inject_strategy: "auto".into(),
-            settings_key_delay_ms: 5,
-            settings_restore_clipboard: true,
-            settings_conversion_mode: "s2t".into(),
-            settings_ui_lang: match initial_lang {
-                UiLang::English => "en",
-                UiLang::Chinese => "zh",
-            }.to_string(),
+            model_ready,
+            settings_language,
+            settings_provider,
+            settings_num_threads,
+            settings_use_vad,
+            settings_vad_threshold,
+            settings_decoding_method,
+            settings_inject_strategy,
+            settings_key_delay_ms,
+            settings_restore_clipboard,
+            settings_conversion_mode,
+            settings_ui_lang,
             settings_theme: theme,
             window_x: wx,
             window_y: wy,
@@ -121,6 +160,94 @@ impl GuiApp {
     fn send_action(&self, action: GuiAction) {
         let _ = self.state.action_tx.send(action);
     }
+
+    /// Show a download-progress panel during model download.
+    fn show_startup_panel(&self, ctx: &egui::Context, status: &ModelStatus) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered_justified(|ui: &mut egui::Ui| {
+                ui.add_space(60.0);
+
+                // App title
+                ui.heading(
+                    egui::RichText::new("Nemotron Voice Input")
+                        .size(28.0)
+                        .strong(),
+                );
+                ui.add_space(20.0);
+
+                match status {
+                    ModelStatus::Checking => {
+                        ui.label(
+                            egui::RichText::new("Checking model files...")
+                                .size(16.0),
+                        );
+                        ui.add_space(10.0);
+                        ui.spinner();
+                    }
+                    ModelStatus::Downloading(_current, _total) => {
+                        ui.label(
+                            egui::RichText::new("Downloading model files...")
+                                .size(16.0),
+                        );
+                        ui.add_space(8.0);
+                        // Simple progress bar
+                        let progress = if *_total > 0 {
+                            *_current as f32 / *_total as f32
+                        } else {
+                            0.0
+                        };
+                        let progress_bar = egui::ProgressBar::new(progress.clamp(0.0, 1.0))
+                            .show_percentage()
+                            .desired_width(400.0);
+                        ui.add(progress_bar);
+                        ui.add_space(4.0);
+                        let mb_current = *_current as f64 / 1_048_576.0;
+                        let mb_total = *_total as f64 / 1_048_576.0;
+                        if *_total > 0 {
+                            ui.label(format!("{:.1} MB / {:.1} MB", mb_current, mb_total));
+                        } else {
+                            ui.label(format!("{:.1} MB downloaded", mb_current));
+                        }
+                    }
+                    ModelStatus::Extracting => {
+                        ui.label(
+                            egui::RichText::new("Extracting model package...")
+                                .size(16.0),
+                        );
+                        ui.add_space(10.0);
+                        ui.spinner();
+                    }
+            ModelStatus::Failed(msg) => {
+                        ui.label(
+                            egui::RichText::new("Model download failed")
+                                .size(16.0)
+                                .color(egui::Color32::RED),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(msg.as_str());
+                        ui.add_space(12.0);
+                        if ui.button("Retry").clicked() {
+                            // Will be re-checked on next frame
+                        }
+                        if ui.button("Continue without models").clicked() {
+                            // Allow starting without ASR (no transcripts)
+                            *self.state.model_status.lock().unwrap() = ModelStatus::Ready;
+                        }
+                    }
+                    ModelStatus::Ready => {
+                        // Should not reach here in this panel
+                    }
+                }
+
+                ui.add_space(40.0);
+                ui.label(
+                    egui::RichText::new("The models will be downloaded from GitHub. This may take a few minutes.")
+                        .size(12.0)
+                        .color(egui::Color32::GRAY),
+                );
+            });
+        });
+    }
 }
 
 impl eframe::App for GuiApp {
@@ -132,6 +259,31 @@ impl eframe::App for GuiApp {
         }
 
         self.process_incoming();
+
+        // Check model download status
+        let current_status = self.state.model_status.lock().unwrap().clone();
+        match &current_status {
+            ModelStatus::Ready => {
+                if !self.model_ready {
+                    self.model_ready = true;
+                    tracing::info!("GUI: models ready — switching to normal UI");
+                }
+            }
+            ModelStatus::Failed(_) => {
+                // Show error panel, keep showing it
+                self.show_startup_panel(ctx, &current_status);
+                ctx.request_repaint();
+                return;
+            }
+            _ => {
+                // Still checking/downloading — show progress panel
+                self.show_startup_panel(ctx, &current_status);
+                ctx.request_repaint();
+                return;
+            }
+        }
+
+        // ── Normal UI (models ready) ──────────────────────────────────
 
         // Apply theme
         if self.settings_theme == "Light" {
@@ -360,7 +512,10 @@ impl eframe::App for GuiApp {
                     ui.add_space(15.0);
                     ui.horizontal(|ui| {
                         if ui.button(self.ui_strings.settings_save()).clicked() {
-                            let mut cfg = crate::config::AppConfig::default();
+                            // Clone the base config to preserve non-GUI fields
+                            // (model_dir, hotkey, audio, etc.) that the settings
+                            // panel does not expose.
+                            let mut cfg = self.base_config.clone().unwrap_or_default();
                             cfg.language.language = self.settings_language.clone();
                             cfg.asr.provider = self.settings_provider.clone();
                             cfg.asr.num_threads = self.settings_num_threads;
@@ -377,6 +532,8 @@ impl eframe::App for GuiApp {
                             cfg.ui.window_y = Some(self.window_y);
                             cfg.ui.window_width = Some(self.window_w);
                             cfg.ui.window_height = Some(self.window_h);
+                            // Update base_config so subsequent saves also work
+                            self.base_config = Some(cfg.clone());
                             pending_save = Some(cfg);
                             self.show_settings = false;
                         }
@@ -419,6 +576,8 @@ pub fn run_gui(
     initial_size: Option<egui::Vec2>,
     initial_theme: Option<String>,
     initial_lang: UiLang,
+    initial_config: Option<&AppConfig>,
+    model_status: Arc<Mutex<ModelStatus>>,
 ) {
     let shared_state = GuiSharedState {
         snapshot,
@@ -426,6 +585,7 @@ pub fn run_gui(
         action_tx,
         show_overlay,
         is_running,
+        model_status,
     };
     let title_strings = Strings::new(initial_lang);
     let window_title = title_strings.app_name().to_owned();
@@ -450,7 +610,7 @@ pub fn run_gui(
         options,
         Box::new(|cc| {
             setup_chinese_fonts(&cc.egui_ctx);
-            Ok(Box::new(GuiApp::new(shared_state, initial_pos, initial_size, initial_theme, initial_lang)))
+            Ok(Box::new(GuiApp::new(shared_state, initial_pos, initial_size, initial_theme, initial_lang, initial_config)))
         }),
     ) {
         Ok(()) => tracing::info!("eframe run_native returned Ok"),

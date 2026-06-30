@@ -58,19 +58,30 @@ pub fn check_model_files(model_dir: &Path) -> Result<bool> {
 
 /// Download all model files to the given directory.
 /// Creates the directory if it doesn't exist.
-pub fn download_models(model_dir: &Path) -> Result<()> {
+/// If `on_progress` is provided, it is called with (phase_name, current_bytes, total_bytes_estimate)
+/// so the GUI can display download progress.
+pub fn download_models(model_dir: &Path, on_progress: Option<&dyn Fn(&str, u64, u64)>) -> Result<()> {
     std::fs::create_dir_all(model_dir)
         .with_context(|| format!("Failed to create model directory: {}", model_dir.display()))?;
 
+    if let Some(cb) = on_progress {
+        cb("checking", 0, 0);
+    }
     info!("Downloading Nemotron ASR models to {:?}...", model_dir);
     info!("Source: {}", MODEL_URL);
 
     let downloaded_bytes = Arc::new(AtomicUsize::new(0));
 
     // Step 1: Download the model tarball
+    if let Some(cb) = on_progress {
+        cb("downloading_tarball", 0, 0);
+    }
     let tarball_path = download_tarball(model_dir, &downloaded_bytes)?;
 
     // Step 2: Extract the tarball
+    if let Some(cb) = on_progress {
+        cb("extracting", 0, 0);
+    }
     let total = downloaded_bytes.load(Ordering::SeqCst);
     info!(
         "Extracting model package ({:.2} MB)...",
@@ -85,9 +96,15 @@ pub fn download_models(model_dir: &Path) -> Result<()> {
     }
 
     // Step 3: Download VAD model
+    if let Some(cb) = on_progress {
+        cb("downloading_vad", 0, 0);
+    }
     download_vad(model_dir, &downloaded_bytes)?;
 
     // Step 4: Final verification
+    if let Some(cb) = on_progress {
+        cb("verifying", 100, 100);
+    }
     let total = downloaded_bytes.load(Ordering::SeqCst) as u64;
     info!("Download complete ({:.2} MB to {:?})", total as f64 / 1_048_576.0, model_dir);
 

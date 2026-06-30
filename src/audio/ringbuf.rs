@@ -52,12 +52,22 @@ impl AudioRingBuffer {
 
     /// Push a slice of samples into the ring buffer.
     /// Returns the number of samples successfully pushed.
+    /// If the buffer is full, remaining samples are silently dropped
+    /// (this is acceptable for real-time audio where the callback
+    /// must not block).
     pub fn push_slice(&self, samples: &[f32]) -> usize {
         let mut pushed = 0;
         for &sample in samples {
             if self.push(sample).is_ok() {
                 pushed += 1;
             } else {
+                let dropped = samples.len().saturating_sub(pushed);
+                if dropped > 0 {
+                    tracing::warn!(
+                        "Audio ring buffer full — dropped {} of {} samples (len={}, cap={})",
+                        dropped, samples.len(), self.len(), self.capacity,
+                    );
+                }
                 break;
             }
         }

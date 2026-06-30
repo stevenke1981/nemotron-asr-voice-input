@@ -287,3 +287,97 @@ impl AppConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_config_default_values_are_valid() {
+        let config = AppConfig::default();
+        assert_eq!(config.audio.sample_rate, 16000);
+        assert_eq!(config.audio.channels, 1);
+        assert!(config.audio.chunk_size_ms > 0);
+        assert_eq!(config.asr.num_threads, 4);
+        assert!(config.hotkey.lang_vk > 0);
+        assert!(config.hotkey.ptt_vk > 0);
+    }
+
+    #[test]
+    fn test_app_config_toml_roundtrip() {
+        let config = AppConfig::default();
+        let toml_str = toml::to_string_pretty(&config).expect("serialize");
+        let deserialized: AppConfig = toml::from_str(&toml_str).expect("deserialize");
+
+        // Compare key fields
+        assert_eq!(deserialized.audio.sample_rate, config.audio.sample_rate);
+        assert_eq!(deserialized.audio.channels, config.audio.channels);
+        assert_eq!(deserialized.asr.num_threads, config.asr.num_threads);
+        assert_eq!(deserialized.asr.provider, config.asr.provider);
+        assert_eq!(deserialized.hotkey.lang_vk, config.hotkey.lang_vk);
+        assert_eq!(deserialized.hotkey.ptt_vk, config.hotkey.ptt_vk);
+        assert_eq!(deserialized.language.language, config.language.language);
+        assert_eq!(deserialized.ui.language, config.ui.language);
+        assert_eq!(deserialized.injector.strategy, config.injector.strategy);
+    }
+
+    #[test]
+    fn test_app_config_load_existing_parses_correctly() {
+        let config = AppConfig::default();
+        let toml_str = toml::to_string_pretty(&config).expect("serialize");
+
+        let dir = std::env::temp_dir().join("nemotron_config_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test_config.toml");
+        std::fs::write(&path, &toml_str).expect("write");
+
+        let loaded = AppConfig::load(&path).expect("load existing");
+        assert_eq!(loaded.audio.sample_rate, 16000);
+        assert_eq!(loaded.asr.num_threads, 4);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn test_app_config_load_corrupted_toml_returns_error() {
+        let dir = std::env::temp_dir().join("nemotron_config_test_corrupt");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("corrupt.toml");
+        std::fs::write(&path, "this is not valid toml {").expect("write");
+
+        let result = AppConfig::load(&path);
+        assert!(result.is_err(), "corrupted TOML should return error");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn test_chunk_samples_calculation() {
+        let config = AppConfig::default();
+        let samples = config.chunk_samples();
+        let expected = (config.audio.sample_rate as u64 * config.audio.chunk_size_ms as u64 / 1000) as usize;
+        assert_eq!(samples, expected);
+    }
+
+    #[test]
+    fn test_runtime_conversion_mode_mapping() {
+        use std::sync::atomic::Ordering;
+
+        RUNTIME_CONVERSION_MODE.store(0, Ordering::SeqCst);
+        assert_eq!(runtime_conversion_mode(), crate::convert::ConversionMode::None);
+
+        RUNTIME_CONVERSION_MODE.store(1, Ordering::SeqCst);
+        assert_eq!(runtime_conversion_mode(), crate::convert::ConversionMode::SimplifiedToTraditional);
+
+        RUNTIME_CONVERSION_MODE.store(2, Ordering::SeqCst);
+        assert_eq!(runtime_conversion_mode(), crate::convert::ConversionMode::TraditionalToSimplified);
+
+        RUNTIME_CONVERSION_MODE.store(99, Ordering::SeqCst);
+        assert_eq!(runtime_conversion_mode(), crate::convert::ConversionMode::None);
+
+        // Restore default
+        RUNTIME_CONVERSION_MODE.store(0, Ordering::SeqCst);
+    }
+}

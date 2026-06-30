@@ -592,3 +592,82 @@ impl Strings {
         .to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── UiLang ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ui_lang_from_code() {
+        assert_eq!(UiLang::from_code("zh"), UiLang::Chinese);
+        assert_eq!(UiLang::from_code("en"), UiLang::English);
+        assert_eq!(UiLang::from_code("fr"), UiLang::English);
+        assert_eq!(UiLang::from_code(""), UiLang::English);
+    }
+
+    #[test]
+    fn test_ui_lang_code_roundtrip() {
+        assert_eq!(UiLang::English.code(), "en");
+        assert_eq!(UiLang::Chinese.code(), "zh");
+    }
+
+    #[test]
+    fn test_ui_lang_display_name() {
+        assert_eq!(UiLang::English.display_name(), "English");
+        assert_eq!(UiLang::Chinese.display_name(), "中文");
+    }
+
+    #[test]
+    fn test_ui_lang_default_is_english() {
+        assert_eq!(UiLang::default(), UiLang::English);
+    }
+
+    // ── Strings basic methods ────────────────────────────────────────
+
+    #[test]
+    fn test_strings_app_name_bilingual() {
+        let en = Strings::new(UiLang::English);
+        let zh = Strings::new(UiLang::Chinese);
+        assert_eq!(en.app_name(), "Nemotron Voice Input");
+        assert_eq!(zh.app_name(), "Nemotron 語音輸入法");
+        assert_ne!(en.app_name(), zh.app_name());
+    }
+
+    #[test]
+    fn test_strings_settings_title_bilingual() {
+        let en = Strings::new(UiLang::English);
+        let zh = Strings::new(UiLang::Chinese);
+        assert_eq!(en.settings_title(), "Settings");
+        assert_eq!(zh.settings_title(), "設定");
+    }
+
+    #[test]
+    fn test_strings_tray_toggle_bilingual() {
+        let en = Strings::new(UiLang::English);
+        let zh = Strings::new(UiLang::Chinese);
+        assert_eq!(en.tray_toggle_recording(), "Toggle Recording");
+        assert_eq!(zh.tray_toggle_recording(), "切換錄音");
+    }
+
+    #[test]
+    fn test_strings_language_display_name_some_codes() {
+        let en = Strings::new(UiLang::English);
+        let zh = Strings::new(UiLang::Chinese);
+
+        // Known codes should have display names
+        assert_eq!(en.language_display_name("en"), "English");
+        assert_eq!(en.language_display_name("zh"), "Chinese (Mandarin)");
+        assert_eq!(en.language_display_name("ja"), "Japanese");
+        assert_eq!(en.language_display_name("de"), "German");
+
+        // Chinese version
+        assert_eq!(zh.language_display_name("en"), "英文");
+        assert_eq!(zh.language_display_name("zh"), "中文（國語）");
+        assert_eq!(zh.language_display_name("ja"), "日文");
+
+        // Unknown code should pass through
+        assert_eq!(en.language_display_name("xx"), "xx");
+    }
+}
